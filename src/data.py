@@ -208,7 +208,8 @@ def load_eva_data(logger, args):
     # 3. 构建视觉超边 (Visual Cluster Hyperedges)
     # 将视觉特征聚类，把“长得像”的实体归为一个超边
     # 聚类数 K=2000，模拟 Visual Words
-    n_vis_clusters = 2000
+    #n_vis_clusters = 2000
+    n_vis_clusters = 5000
     kmeans = MiniBatchKMeans(n_clusters=n_vis_clusters, batch_size=4096, random_state=42).fit(img_features)
     vis_labels = kmeans.labels_
     
