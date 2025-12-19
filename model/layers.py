@@ -8,6 +8,27 @@ import torch.nn.functional as F
 import pdb
 
 
+# class SpecialSpmmFunction(torch.autograd.Function):
+#     """Special function for only sparse region backpropataion layer."""
+#     @staticmethod
+#     def forward(ctx, indices, values, shape, b):
+#         assert indices.requires_grad is False
+#         a = torch.sparse_coo_tensor(indices, values, shape)
+#         ctx.save_for_backward(a, b)
+#         ctx.N = shape[0]
+#         return torch.matmul(a, b)
+
+#     @staticmethod
+#     def backward(ctx, grad_output):
+#         a, b = ctx.saved_tensors
+#         grad_values = grad_b = None
+#         if ctx.needs_input_grad[1]:
+#             grad_a_dense = grad_output.matmul(b.t())
+#             edge_idx = a._indices()[0, :] * ctx.N + a._indices()[1, :]
+#             grad_values = grad_a_dense.view(-1)[edge_idx]
+#         if ctx.needs_input_grad[3]:
+#             grad_b = a.t().matmul(grad_output)
+#         return None, grad_values, None, grad_b
 class SpecialSpmmFunction(torch.autograd.Function):
     """Special function for only sparse region backpropataion layer."""
     @staticmethod
@@ -23,9 +44,27 @@ class SpecialSpmmFunction(torch.autograd.Function):
         a, b = ctx.saved_tensors
         grad_values = grad_b = None
         if ctx.needs_input_grad[1]:
-            grad_a_dense = grad_output.matmul(b.t())
-            edge_idx = a._indices()[0, :] * ctx.N + a._indices()[1, :]
-            grad_values = grad_a_dense.view(-1)[edge_idx]
+            # === [优化开始] ===
+            # 原代码 (会导致 OOM):
+            # grad_a_dense = grad_output.matmul(b.t())
+            # edge_idx = a._indices()[0, :] * ctx.N + a._indices()[1, :]
+            # grad_values = grad_a_dense.view(-1)[edge_idx]
+            
+            # 新代码 (显存优化版):
+            # 直接只计算存在的边的梯度，避免生成 N x N 稠密矩阵
+            indices = a._indices()
+            row_indices = indices[0] # source nodes
+            col_indices = indices[1] # target nodes
+            
+            # dL/dA_ij = dot(dL/dOut_i, B_j)
+            # Gather 对应的行和列
+            grad_output_rows = grad_output[row_indices]
+            b_cols = b[col_indices]
+            
+            # 逐元素相乘并求和，得到每条边的梯度值
+            grad_values = (grad_output_rows * b_cols).sum(dim=1)
+            # === [优化结束] ===
+            
         if ctx.needs_input_grad[3]:
             grad_b = a.t().matmul(grad_output)
         return None, grad_values, None, grad_b

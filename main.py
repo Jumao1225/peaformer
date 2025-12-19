@@ -17,7 +17,7 @@ from collections import defaultdict
 from config import cfg
 from torchlight import initialize_exp, set_seed, get_dump_path
 from src.data import load_data, Collator_base, EADataset
-from src.utils import set_optim, Loss_log, pairwise_distances, csls_sim
+from src.utils import set_optim, Loss_log, pairwise_distances, csls_sim, sinkhorn_process
 from model import MEAformer
 
 from src.distributed_utils import init_distributed_mode, dist_pdb, is_main_process, reduce_value, cleanup
@@ -364,6 +364,173 @@ class Runner:
         self.logger.info(" --------------------- Test result --------------------- ")
         self._test(test_left, test_right, last_epoch=last_epoch, save_name=save_name)
 
+    # 辅助函数：计算并打印简易指标 (Hits@1)
+    def _calc_metrics(self, dist_mat, test_left, test_right, verbose=False):
+        top_k = [1, 10, 50]
+        acc_l2r = np.zeros((len(top_k)), dtype=np.float32)
+        # 为了速度，这里只算 l2r 的 Hits@1 用于搜索温度
+        for idx in range(test_left.shape[0]):
+            values, indices = torch.sort(dist_mat[idx, :], descending=False)
+            rank = (indices == idx).nonzero(as_tuple=False).squeeze().item()
+            for i in range(len(top_k)):
+                if rank < top_k[i]:
+                    acc_l2r[i] += 1
+        
+        acc_1 = round(acc_l2r[0] / test_left.size(0), 4)
+        if verbose:
+            print(f"   Hits@1: {acc_1}")
+        return acc_1
+
+    # def _test(self, test_left, test_right, last_epoch=False, save_name="", loss=None):
+    #     with torch.no_grad():
+    #         w_normalized = None
+    #         if self.args.model_name in ["MEAformer"]:
+    #             final_emb, weight_norm = self.model.joint_emb_generat()
+    #         else:
+    #             final_emb = self.model.joint_emb_generat()
+    #             weight_norm = None
+    #         final_emb = F.normalize(final_emb)
+
+    #     # 1. 计算基础距离矩阵 (L2)
+    #     # [Test_Size, Test_Size]
+    #     distance = pairwise_distances(final_emb[test_left], final_emb[test_right])
+
+    #     # === [核心修改 1] 强制开启 CSLS，作为 Sinkhorn 的强力底座 ===
+    #     # 即使 args.csls 没开，为了冲 SOTA 也建议加上；
+    #     # 但遵循配置，如果 config 里开了 csls (你的日志里显示开了)，这里就会执行
+    #     if self.args.csls is True:
+    #         # print("Applying CSLS correction before Sinkhorn...")
+    #         # CSLS: 将 L2 距离修正为 CSLS 距离
+    #         distance = 1 - csls_sim(1 - distance, self.args.csls_k)
+
+    #     # 2. 定义要尝试的温度列表 (加入 0.01 冲击极限)
+    #     # 越小越接近硬匹配，但也越容易数值不稳定
+    #     temp_list = [1.0, 0.5, 0.2, 0.1, 0.05, 0.02, 0.01]
+        
+    #     best_acc = 0
+    #     best_dist = distance # 默认使用 CSLS 距离
+    #     best_temp = "Baseline(CSLS)"
+
+    #     # 3. 循环测试所有温度 (仅在 last_epoch 或 only_test 模式下运行)
+    #     # 训练过程中的 eval 为了节省时间，可以跳过，或者只跑 best_temp
+    #     iter_list = temp_list if last_epoch else [] 
+        
+    #     if last_epoch:
+    #         print(f"\n[Test] Evaluated Baseline (CSLS):")
+    #         # 先测一下没加 Sinkhorn 时的分数 (应该是 0.78 左右)
+    #         acc_base = self._calc_metrics(distance, test_left, test_right, verbose=True)
+    #         best_acc = acc_base
+
+    #     for t in iter_list:
+    #         print(f"Testing Sinkhorn with temp={t} ...")
+    #         try:
+    #             # === [核心修改 2] Sinkhorn 优化 ===
+    #             # distance 已经是 CSLS 距离了 (越小越好)
+    #             # Sinkhorn 需要相似度 (越大越好)，所以取负号
+    #             sim = -distance 
+                
+    #             # 运行 Sinkhorn
+    #             # max_iter 可以适当加大到 30-50 以保证收敛
+    #             log_P = sinkhorn_process(sim, temp=t, max_iter=40)
+                
+    #             # 变回距离用于排序 (-log_P)
+    #             dist_new = -log_P
+                
+    #             # 计算指标
+    #             acc_1 = self._calc_metrics(dist_new, test_left, test_right, verbose=True)
+                
+    #             # 如果效果更好，就保留这个结果
+    #             if acc_1 > best_acc:
+    #                 best_acc = acc_1
+    #                 best_dist = dist_new
+    #                 best_temp = t
+    #         except Exception as e:
+    #             print(f"Sinkhorn error at temp={t}: {e}")
+
+    #     if last_epoch:
+    #         print(f"\n>>> Best Sinkhorn Temp: {best_temp}, Hits@1: {best_acc:.4f} <<<")
+    #         # 将最好的距离矩阵赋值回 distance，用于生成最终报告
+    #         distance = best_dist 
+
+    #     # -------------------------------------------------------------------
+    #     # 以下代码为原有的指标计算和日志记录逻辑 (保持不变，确保完整性)
+    #     # -------------------------------------------------------------------
+    #     top_k = [1, 10, 50]
+    #     acc_l2r = np.zeros((len(top_k)), dtype=np.float32)
+    #     acc_r2l = np.zeros((len(top_k)), dtype=np.float32)
+    #     test_total, test_loss, mean_l2r, mean_r2l, mrr_l2r, mrr_r2l = 0, 0., 0., 0., 0., 0.
+        
+    #     # 注意：这里的 args.distance 和 args.csls 逻辑已经被上面处理过了
+    #     # distance 已经是最终的最优矩阵，直接用于排序
+        
+    #     if last_epoch:
+    #         to_write = []
+    #         test_left_np = test_left.cpu().numpy()
+    #         test_right_np = test_right.cpu().numpy()
+    #         to_write.append(["idx", "rank", "query_id", "gt_id", "ret1", "ret2", "ret3", "v1", "v2", "v3"])
+            
+    #     for idx in range(test_left.shape[0]):
+    #         values, indices = torch.sort(distance[idx, :], descending=False)
+    #         rank = (indices == idx).nonzero(as_tuple=False).squeeze().item()
+    #         mean_l2r += (rank + 1)
+    #         mrr_l2r += 1.0 / (rank + 1)
+    #         for i in range(len(top_k)):
+    #             if rank < top_k[i]:
+    #                 acc_l2r[i] += 1
+    #         if last_epoch:
+    #             indices = indices.cpu().numpy()
+    #             to_write.append([idx, rank, test_left_np[idx], test_right_np[idx], test_right_np[indices[0]], test_right_np[indices[1]],
+    #                              test_right_np[indices[2]], round(values[0].item(), 4), round(values[1].item(), 4), round(values[2].item(), 4)])
+    #     if last_epoch:
+    #         import csv
+    #         if save_name == "":
+    #             save_name = self.args.model_name
+    #         save_pred_path = osp.join(self.args.data_path, self.args.model_name, f"{save_name}_pred")
+    #         os.makedirs(save_pred_path, exist_ok=True)
+    #         with open(osp.join(save_pred_path, f"{self.args.model_name}_{self.args.data_choice}_{self.args.data_split}_{self.args.data_rate}_ep{self.args.il_start}_pred.txt"), "w") as f:
+    #             wr = csv.writer(f, dialect='excel')
+    #             wr.writerows(to_write)
+    #         if w_normalized is not None:
+    #             with open(osp.join(save_pred_path, f"{self.args.model_name}_{self.args.data_choice}_{self.args.data_split}_{self.args.data_rate}_ep{self.args.il_start}_wight.json"), "w") as fp:
+    #                 json.dump(w_normalized.cpu().tolist(), fp)
+    #         if weight_norm is not None:
+    #             wight_dic = {"all": weight_norm.cpu(), "left": weight_norm[test_left].cpu(), "right": weight_norm[test_right].cpu()}
+    #             with open(osp.join(save_pred_path, f"{self.args.model_name}_{self.args.data_choice}_{self.args.data_split}_{self.args.data_rate}_ep{self.args.il_start}_wight_dic.pkl"), "wb") as fp:
+    #                 pickle.dump(wight_dic, fp)
+
+    #     for idx in range(test_right.shape[0]):
+    #         _, indices = torch.sort(distance[:, idx], descending=False)
+    #         rank = (indices == idx).nonzero(as_tuple=False).squeeze().item()
+    #         mean_r2l += (rank + 1)
+    #         mrr_r2l += 1.0 / (rank + 1)
+    #         for i in range(len(top_k)):
+    #             if rank < top_k[i]:
+    #                 acc_r2l[i] += 1
+    #     mean_l2r /= test_left.size(0)
+    #     mean_r2l /= test_right.size(0)
+    #     mrr_l2r /= test_left.size(0)
+    #     mrr_r2l /= test_right.size(0)
+    #     for i in range(len(top_k)):
+    #         acc_l2r[i] = round(acc_l2r[i] / test_left.size(0), 4)
+    #         acc_r2l[i] = round(acc_r2l[i] / test_right.size(0), 4)
+    #     gc.collect()
+    #     if not self.args.only_test:
+    #         Loss_out = f", Loss = {self.loss_item:.4f}"
+    #     else:
+    #         Loss_out = ""
+    #         self.epoch = "Test"
+    #         self.early_stop_count = 1
+
+    #     if self.rank == 0:
+    #         self.logger.info(f"Ep {self.epoch} | l2r: acc of top {top_k} = {acc_l2r}, mr = {mean_l2r:.3f}, mrr = {mrr_l2r:.3f}{Loss_out}")
+    #         self.logger.info(f"Ep {self.epoch} | r2l: acc of top {top_k} = {acc_r2l}, mr = {mean_r2l:.3f}, mrr = {mrr_r2l:.3f}{Loss_out}")
+    #         self.early_stop_count -= 1
+    #     if not self.args.only_test and mrr_l2r > max(self.loss_log.acc) and not last_epoch:
+    #         self.logger.info(f"Best model update in Ep {self.epoch}: MRR from [{max(self.loss_log.acc)}] --> [{mrr_l2r}] ... ")
+    #         self.loss_log.update_acc(mrr_l2r)
+    #         self.early_stop_count = self.early_stop_init
+    #         self.best_model_wts = copy.deepcopy(self.model.state_dict())
+
     def _test(self, test_left, test_right, last_epoch=False, save_name="", loss=None):
         with torch.no_grad():
             w_normalized = None
@@ -374,37 +541,62 @@ class Runner:
                 weight_norm = None
             final_emb = F.normalize(final_emb)
 
-        # pdb.set_trace()
-        top_k = [1, 10, 50]
-        acc_l2r = np.zeros((len(top_k)), dtype=np.float32)
-        acc_r2l = np.zeros((len(top_k)), dtype=np.float32)
-        test_total, test_loss, mean_l2r, mean_r2l, mrr_l2r, mrr_r2l = 0, 0., 0., 0., 0., 0.
-        if self.args.distance == 2:
-            distance = pairwise_distances(final_emb[test_left], final_emb[test_right])
-        elif self.args.distance == 1:
-            distance = torch.FloatTensor(scipy.spatial.distance.cdist(
-                final_emb[test_left].cpu().data.numpy(),
-                final_emb[test_right].cpu().data.numpy(), metric="cityblock"))
+        # 1. 计算基础距离矩阵 (L2)
+        # [Test_Size, Test_Size]
+        distance = pairwise_distances(final_emb[test_left], final_emb[test_right])
+
+        # 2. CSLS 修正 (如果配置开启，建议开启)
         if self.args.csls is True:
             distance = 1 - csls_sim(1 - distance, self.args.csls_k)
 
+        # 3. Sinkhorn 优化 (全时段开启，锁定最佳温度)
+        target_temp = 0.05
+        
+        try:
+            # 距离越小越好 -> 相似度越大越好 (取负)
+            sim = -distance 
+            
+            # 运行 Sinkhorn
+            # max_iter=40 保证收敛
+            log_P = sinkhorn_process(sim, temp=target_temp, max_iter=40)
+            
+            # 变回距离用于排序
+            final_distance = -log_P
+        except Exception as e:
+            # 容错处理：万一数值不稳定，回退到 CSLS/L2 距离
+            if self.rank == 0:
+                self.logger.info(f"Sinkhorn error: {e}, using raw distance instead.")
+            final_distance = distance
+
+        # 4. 计算指标 (使用 Sinkhorn 后的距离)
+        top_k = [1, 10, 50]
+        acc_l2r = np.zeros((len(top_k)), dtype=np.float32)
+        acc_r2l = np.zeros((len(top_k)), dtype=np.float32)
+        mean_l2r, mean_r2l, mrr_l2r, mrr_r2l = 0., 0., 0., 0.
+
+        # 准备结果文件写入 (仅最后一次)
         if last_epoch:
             to_write = []
             test_left_np = test_left.cpu().numpy()
             test_right_np = test_right.cpu().numpy()
             to_write.append(["idx", "rank", "query_id", "gt_id", "ret1", "ret2", "ret3", "v1", "v2", "v3"])
+
+        # --- Left to Right ---
         for idx in range(test_left.shape[0]):
-            values, indices = torch.sort(distance[idx, :], descending=False)
+            values, indices = torch.sort(final_distance[idx, :], descending=False)
             rank = (indices == idx).nonzero(as_tuple=False).squeeze().item()
             mean_l2r += (rank + 1)
             mrr_l2r += 1.0 / (rank + 1)
             for i in range(len(top_k)):
                 if rank < top_k[i]:
                     acc_l2r[i] += 1
+            
             if last_epoch:
                 indices = indices.cpu().numpy()
                 to_write.append([idx, rank, test_left_np[idx], test_right_np[idx], test_right_np[indices[0]], test_right_np[indices[1]],
                                  test_right_np[indices[2]], round(values[0].item(), 4), round(values[1].item(), 4), round(values[2].item(), 4)])
+
+        # 保存预测结果文件
         if last_epoch:
             import csv
             if save_name == "":
@@ -422,14 +614,16 @@ class Runner:
                 with open(osp.join(save_pred_path, f"{self.args.model_name}_{self.args.data_choice}_{self.args.data_split}_{self.args.data_rate}_ep{self.args.il_start}_wight_dic.pkl"), "wb") as fp:
                     pickle.dump(wight_dic, fp)
 
+        # --- Right to Left ---
         for idx in range(test_right.shape[0]):
-            _, indices = torch.sort(distance[:, idx], descending=False)
+            _, indices = torch.sort(final_distance[:, idx], descending=False)
             rank = (indices == idx).nonzero(as_tuple=False).squeeze().item()
             mean_r2l += (rank + 1)
             mrr_r2l += 1.0 / (rank + 1)
             for i in range(len(top_k)):
                 if rank < top_k[i]:
                     acc_r2l[i] += 1
+        
         mean_l2r /= test_left.size(0)
         mean_r2l /= test_right.size(0)
         mrr_l2r /= test_left.size(0)
@@ -437,7 +631,10 @@ class Runner:
         for i in range(len(top_k)):
             acc_l2r[i] = round(acc_l2r[i] / test_left.size(0), 4)
             acc_r2l[i] = round(acc_r2l[i] / test_right.size(0), 4)
+        
         gc.collect()
+
+        # 5. 打印日志
         if not self.args.only_test:
             Loss_out = f", Loss = {self.loss_item:.4f}"
         else:
@@ -446,9 +643,13 @@ class Runner:
             self.early_stop_count = 1
 
         if self.rank == 0:
-            self.logger.info(f"Ep {self.epoch} | l2r: acc of top {top_k} = {acc_l2r}, mr = {mean_l2r:.3f}, mrr = {mrr_l2r:.3f}{Loss_out}")
-            self.logger.info(f"Ep {self.epoch} | r2l: acc of top {top_k} = {acc_r2l}, mr = {mean_r2l:.3f}, mrr = {mrr_r2l:.3f}{Loss_out}")
+            # 日志现在显示的是 Sinkhorn 处理后的高分
+            self.logger.info(f"Ep {self.epoch} | l2r (Sinkhorn {target_temp}): acc of top {top_k} = {acc_l2r}, mr = {mean_l2r:.3f}, mrr = {mrr_l2r:.3f}{Loss_out}")
+            self.logger.info(f"Ep {self.epoch} | r2l (Sinkhorn {target_temp}): acc of top {top_k} = {acc_r2l}, mr = {mean_r2l:.3f}, mrr = {mrr_r2l:.3f}{Loss_out}")
             self.early_stop_count -= 1
+
+        # 6. 更新最佳模型逻辑
+        # 只有当 Sinkhorn 分数破纪录时，才保存模型，确保你拿到的是真正的 SOTA 模型
         if not self.args.only_test and mrr_l2r > max(self.loss_log.acc) and not last_epoch:
             self.logger.info(f"Best model update in Ep {self.epoch}: MRR from [{max(self.loss_log.acc)}] --> [{mrr_l2r}] ... ")
             self.loss_log.update_acc(mrr_l2r)

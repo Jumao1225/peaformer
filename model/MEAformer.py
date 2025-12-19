@@ -9,7 +9,7 @@ import pdb
 import math
 from .Tool_model import AutomaticWeightedLoss
 from .MEAformer_tools import MultiModalEncoder
-from .MEAformer_loss import CustomMultiLossLayer, icl_loss
+from .MEAformer_loss import CustomMultiLossLayer, icl_loss, SinkhornLoss
 
 from src.utils import pairwise_distances
 import os.path as osp
@@ -80,6 +80,10 @@ class MEAformer(nn.Module):
         else:
             self.topo_features = None
 
+        # 初始化 Sinkhorn Loss
+        # 建议 tau 设为 0.1 或 0.05，n_iter 设为 3 或 5 即可（太大会减慢训练）
+        self.sinkhorn_loss_fn = SinkhornLoss(tau=0.05, n_iter=3)
+
     def forward(self, batch):
         gph_emb, img_emb, rel_emb, att_emb, name_emb, char_emb, joint_emb, hidden_states = self.joint_emb_generat(only_joint=False)
         gph_emb_hid, rel_emb_hid, att_emb_hid, img_emb_hid, name_emb_hid, char_emb_hid, joint_emb_hid = self.generate_hidden_emb(hidden_states)
@@ -134,12 +138,38 @@ class MEAformer(nn.Module):
         loss_cl_cross = self.compute_contrastive_loss(gph_emb, img_emb, batch)
         
         #loss_all = loss_joi + in_loss + out_loss + self.args.conflict_weight * loss_conflict
-        loss_all = loss_joi + in_loss + out_loss + self.args.conflict_weight * loss_cl_cross
+        #loss_all = loss_joi + in_loss + out_loss + self.args.conflict_weight * loss_cl_cross
         
         # =================================================
         #loss_all = loss_joi + in_loss + out_loss
 
-        loss_dic = {"joint_Intra_modal": loss_joi.item(), "Intra_modal": in_loss.item()}
+        # === [新增] 计算 Sinkhorn Training Loss ===
+        # 1. 获取当前 Batch 对应的左右实体 Embedding
+        if torch.is_tensor(batch):
+             batch_idx = batch
+        else:
+             batch_idx = torch.tensor(batch, dtype=torch.int64).cuda()
+             
+        # 从 joint_emb (所有实体) 中索引出当前 Batch 的特征
+        emb_left = joint_emb[batch_idx[:, 0]]
+        emb_right = joint_emb[batch_idx[:, 1]]
+        
+        # 2. 计算 Loss
+        loss_sinkhorn = self.sinkhorn_loss_fn(emb_left, emb_right)
+        # =========================================
+
+        sinkhorn_weight = 1.0 
+        
+        loss_all = loss_joi + in_loss + out_loss + \
+                   self.args.conflict_weight * loss_cl_cross + \
+                   sinkhorn_weight * loss_sinkhorn
+
+        #loss_dic = {"joint_Intra_modal": loss_joi.item(), "Intra_modal": in_loss.item()}
+        loss_dic = {
+            "joint_Intra_modal": loss_joi.item(), 
+            "Intra_modal": in_loss.item(),
+            "Sinkhorn": loss_sinkhorn.item() # 记录一下
+        }
         output = {"loss_dic": loss_dic, "emb": joint_emb}
         return loss_all, output
 

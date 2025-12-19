@@ -149,3 +149,45 @@ class icl_loss(nn.Module):
             loss_a = self.softXEnt(labels, logits_a)
             loss_b = self.softXEnt(labels, logits_b)
             return alpha * loss_a + (1 - alpha) * loss_b
+
+class SinkhornLoss(nn.Module):
+    def __init__(self, tau=0.05, n_iter=5):
+        super(SinkhornLoss, self).__init__()
+        self.tau = tau
+        self.n_iter = n_iter
+
+    def forward(self, emb1, emb2):
+        # emb1, emb2: [Batch_Size, Dim]
+        
+        # 1. 计算相似度矩阵 (Cosine Similarity)
+        # 归一化以确保数值稳定
+        emb1 = F.normalize(emb1, dim=1)
+        emb2 = F.normalize(emb2, dim=1)
+        
+        # S_ij = emb1_i * emb2_j / tau
+        sim_matrix = torch.matmul(emb1, emb2.t()) / self.tau
+
+        # 2. 可微分 Sinkhorn 迭代 (Log-space)
+        # 将相似度矩阵“双向归一化”，逼近置换矩阵
+        P = sim_matrix
+        for _ in range(self.n_iter):
+            # 行归一化
+            P = P - torch.logsumexp(P, dim=1, keepdim=True)
+            # 列归一化
+            P = P - torch.logsumexp(P, dim=0, keepdim=True)
+
+        # 3. 计算对角线 Loss (最大化正确匹配对的概率)
+        # 我们希望 P[i, i] (对角线元素) 尽可能大
+        # Loss = -mean(P[i, i])
+        
+        # 获取 batch 内的对角线索引
+        batch_size = emb1.size(0)
+        diag_indices = torch.arange(batch_size, device=emb1.device)
+        
+        # 取出对角线上的 Log Probability
+        log_prob_diag = P[diag_indices, diag_indices]
+        
+        # 最小化负的对数概率
+        loss = -torch.mean(log_prob_diag)
+        
+        return loss

@@ -455,3 +455,25 @@ def output_device(model):
     # for d in devices:
     #     print(d)
     print(devices)
+
+def sinkhorn_process(similarity_matrix, temp=0.05, max_iter=20):
+    """
+    Sinkhorn 算法：将相似度矩阵转化为双随机矩阵 (Doubly Stochastic Matrix)
+    用于解决实体对齐中的 1-to-1 约束问题。
+    
+    Args:
+        similarity_matrix (Tensor): [N_left, N_right] 的相似度矩阵 (越大越相似)
+        temp (float): 温度系数，越小越接近硬匹配 (推荐 0.02 - 0.05)
+        max_iter (int): 迭代次数
+    """
+    # 1. 也就是 log_sinkhorn 的输入
+    Q = similarity_matrix / temp
+    
+    for k in range(max_iter):
+        # 2. 行归一化 (LogSoftmax)
+        Q = Q - torch.logsumexp(Q, dim=1, keepdim=True)
+        # 3. 列归一化 (LogSoftmax)
+        Q = Q - torch.logsumexp(Q, dim=0, keepdim=True)
+        
+    # 4. 转回概率空间
+    return torch.exp(Q)

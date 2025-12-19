@@ -9,7 +9,7 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 python  main.py \
             --epoch         500 \
             --lr            5e-4  \
             --hidden_units  "300,300,300" \
-            --save_model    0 \
+            --save_model    1 \
             --batch_size    3500 \
 	        --csls          \
 	        --csls_k        3 \
