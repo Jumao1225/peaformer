@@ -7,7 +7,7 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 python  main.py \
             --data_split    $3 \
             --data_rate     $4 \
             --epoch         500 \
-            --lr            5e-4  \
+            --lr            2e-4  \
             --hidden_units  "300,300,300" \
             --save_model    1 \
             --batch_size    3500 \
@@ -25,10 +25,13 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 python  main.py \
             --name_dim      300     \
             --char_dim      300     \
             --hidden_size   300     \
-            --tau           0.1     \
+            --tau           0.07     \
             --structure_encoder "gat" \
             --num_attention_heads 1 \
             --num_hidden_layers 1 \
+            --dropout       0.2   \
+            --attn_dropout  0.1   \
+            --weight_decay  1e-3  \
             --use_surface   $5     \
             --use_intermediate 1   \
             --enable_sota \

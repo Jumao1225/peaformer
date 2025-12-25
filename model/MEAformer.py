@@ -140,7 +140,7 @@ class MEAformer(nn.Module):
         #loss_all = loss_joi + in_loss + out_loss + self.args.conflict_weight * loss_conflict
         #loss_all = loss_joi + in_loss + out_loss + self.args.conflict_weight * loss_cl_cross
         
-        # =================================================
+        # =================================================  
         #loss_all = loss_joi + in_loss + out_loss
 
         # === [新增] 计算 Sinkhorn Training Loss ===
@@ -158,7 +158,7 @@ class MEAformer(nn.Module):
         loss_sinkhorn = self.sinkhorn_loss_fn(emb_left, emb_right)
         # =========================================
 
-        sinkhorn_weight = 1.0 
+        sinkhorn_weight = 100.0 
         
         loss_all = loss_joi + in_loss + out_loss + \
                    self.args.conflict_weight * loss_cl_cross + \
