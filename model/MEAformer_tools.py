@@ -136,6 +136,26 @@ class MultiModalEncoder(nn.Module):
         self.img_fc = nn.Linear(img_feature_dim, img_dim)
         self.name_fc = nn.Linear(768, char_dim) # LaBSE 维度
         self.char_fc = nn.Linear(char_feature_dim, char_dim)
+       
+        # ============================================================
+        # 为“图像”和“属性”模态分别定义一个 GCN/GAT 编码器
+        # 作用：让当前实体的特征去“吸收”邻居的特征，解决单点噪声问题
+        # 维度：输入输出保持一致 (img_dim -> img_dim)，方便残差连接
+        
+        if self.args.structure_encoder == "gcn":
+            # GCN(输入维, 隐层维, 输出维, dropout)
+            self.img_gcn = GCN(img_dim, img_dim, img_dim, dropout=self.args.dropout)
+            self.att_gcn = GCN(attr_dim, attr_dim, attr_dim, dropout=self.args.dropout)
+        else:
+            # 如果配置用 GAT，这里强制使用单头(heads=[1,1])以节省显存并防止过拟合
+            # 也可以跟随 args.heads，但单头通常够用了
+            self.img_gcn = GAT(n_units=[img_dim, img_dim, img_dim], n_heads=[1, 1], 
+                               dropout=self.args.dropout, attn_dropout=self.args.attn_dropout, 
+                               instance_normalization=self.args.instance_normalization, diag=True)
+            self.att_gcn = GAT(n_units=[attr_dim, attr_dim, attr_dim], n_heads=[1, 1], 
+                               dropout=self.args.dropout, attn_dropout=self.args.attn_dropout, 
+                               instance_normalization=self.args.instance_normalization, diag=True)
+        # ============================================================
 
         # === [新增: 拓扑特征编码器] ===
         # 输入维度是 2 (Degree + PageRank)
@@ -273,7 +293,15 @@ class MultiModalEncoder(nn.Module):
 
         # 3. 其他模态
         if self.args.w_img:
-            img_emb = self.img_fc(img_features)
+            #img_emb = self.img_fc(img_features)
+            # 1. 原始视觉特征 (Visual Projection)
+            img_raw = self.img_fc(img_features)
+            
+            # 2. [新增] 结构注入 (Structure Injection)
+            # 将视觉特征放入图谱中传播，聚合邻居的视觉信息
+            img_struct = self.img_gcn(img_raw, adj)
+
+            img_emb = img_raw + 0.5 * img_struct
         else:
             img_emb = None
         if self.args.w_rel:
@@ -281,7 +309,14 @@ class MultiModalEncoder(nn.Module):
         else:
             rel_emb = None
         if self.args.w_attr:
-            att_emb = self.att_fc(att_features)
+            #att_emb = self.att_fc(att_features)
+            # 1. 原始属性特征
+            att_raw = self.att_fc(att_features)
+            
+            # 2. [新增] 结构注入
+            att_struct = self.att_gcn(att_raw, adj)
+            
+            att_emb = att_raw + 0.5 * att_struct
         else:
             att_emb = None
         if self.args.w_name and name_features is not None:

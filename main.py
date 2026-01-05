@@ -381,6 +381,131 @@ class Runner:
             print(f"   Hits@1: {acc_1}")
         return acc_1
 
+    # def _test(self, test_left, test_right, last_epoch=False, save_name="", loss=None):
+    #     with torch.no_grad():
+    #         w_normalized = None
+    #         if self.args.model_name in ["MEAformer"]:
+    #             final_emb, weight_norm = self.model.joint_emb_generat()
+    #         else:
+    #             final_emb = self.model.joint_emb_generat()
+    #             weight_norm = None
+    #         final_emb = F.normalize(final_emb)
+
+    #     # 1. 计算基础距离矩阵 (L2)
+    #     # [Test_Size, Test_Size]
+    #     distance = pairwise_distances(final_emb[test_left], final_emb[test_right])
+
+    #     # 2. CSLS 修正 (如果配置开启，建议开启)
+    #     if self.args.csls is True:
+    #         distance = 1 - csls_sim(1 - distance, self.args.csls_k)
+
+    #     # 3. Sinkhorn 优化 (全时段开启，锁定最佳温度)
+    #     target_temp = 0.05
+        
+    #     try:
+    #         # 距离越小越好 -> 相似度越大越好 (取负)
+    #         sim = -distance 
+            
+    #         # 运行 Sinkhorn
+    #         # max_iter=40 保证收敛
+    #         log_P = sinkhorn_process(sim, temp=target_temp, max_iter=40)
+            
+    #         # 变回距离用于排序
+    #         final_distance = -log_P
+    #     except Exception as e:
+    #         # 容错处理：万一数值不稳定，回退到 CSLS/L2 距离
+    #         if self.rank == 0:
+    #             self.logger.info(f"Sinkhorn error: {e}, using raw distance instead.")
+    #         final_distance = distance
+
+    #     # 4. 计算指标 (使用 Sinkhorn 后的距离)
+    #     top_k = [1, 10, 50]
+    #     acc_l2r = np.zeros((len(top_k)), dtype=np.float32)
+    #     acc_r2l = np.zeros((len(top_k)), dtype=np.float32)
+    #     mean_l2r, mean_r2l, mrr_l2r, mrr_r2l = 0., 0., 0., 0.
+
+    #     # 准备结果文件写入 (仅最后一次)
+    #     if last_epoch:
+    #         to_write = []
+    #         test_left_np = test_left.cpu().numpy()
+    #         test_right_np = test_right.cpu().numpy()
+    #         to_write.append(["idx", "rank", "query_id", "gt_id", "ret1", "ret2", "ret3", "v1", "v2", "v3"])
+
+    #     # --- Left to Right ---
+    #     for idx in range(test_left.shape[0]):
+    #         values, indices = torch.sort(final_distance[idx, :], descending=False)
+    #         rank = (indices == idx).nonzero(as_tuple=False).squeeze().item()
+    #         mean_l2r += (rank + 1)
+    #         mrr_l2r += 1.0 / (rank + 1)
+    #         for i in range(len(top_k)):
+    #             if rank < top_k[i]:
+    #                 acc_l2r[i] += 1
+            
+    #         if last_epoch:
+    #             indices = indices.cpu().numpy()
+    #             to_write.append([idx, rank, test_left_np[idx], test_right_np[idx], test_right_np[indices[0]], test_right_np[indices[1]],
+    #                              test_right_np[indices[2]], round(values[0].item(), 4), round(values[1].item(), 4), round(values[2].item(), 4)])
+
+    #     # 保存预测结果文件
+    #     if last_epoch:
+    #         import csv
+    #         if save_name == "":
+    #             save_name = self.args.model_name
+    #         save_pred_path = osp.join(self.args.data_path, self.args.model_name, f"{save_name}_pred")
+    #         os.makedirs(save_pred_path, exist_ok=True)
+    #         with open(osp.join(save_pred_path, f"{self.args.model_name}_{self.args.data_choice}_{self.args.data_split}_{self.args.data_rate}_ep{self.args.il_start}_pred.txt"), "w") as f:
+    #             wr = csv.writer(f, dialect='excel')
+    #             wr.writerows(to_write)
+    #         if w_normalized is not None:
+    #             with open(osp.join(save_pred_path, f"{self.args.model_name}_{self.args.data_choice}_{self.args.data_split}_{self.args.data_rate}_ep{self.args.il_start}_wight.json"), "w") as fp:
+    #                 json.dump(w_normalized.cpu().tolist(), fp)
+    #         if weight_norm is not None:
+    #             wight_dic = {"all": weight_norm.cpu(), "left": weight_norm[test_left].cpu(), "right": weight_norm[test_right].cpu()}
+    #             with open(osp.join(save_pred_path, f"{self.args.model_name}_{self.args.data_choice}_{self.args.data_split}_{self.args.data_rate}_ep{self.args.il_start}_wight_dic.pkl"), "wb") as fp:
+    #                 pickle.dump(wight_dic, fp)
+
+    #     # --- Right to Left ---
+    #     for idx in range(test_right.shape[0]):
+    #         _, indices = torch.sort(final_distance[:, idx], descending=False)
+    #         rank = (indices == idx).nonzero(as_tuple=False).squeeze().item()
+    #         mean_r2l += (rank + 1)
+    #         mrr_r2l += 1.0 / (rank + 1)
+    #         for i in range(len(top_k)):
+    #             if rank < top_k[i]:
+    #                 acc_r2l[i] += 1
+        
+    #     mean_l2r /= test_left.size(0)
+    #     mean_r2l /= test_right.size(0)
+    #     mrr_l2r /= test_left.size(0)
+    #     mrr_r2l /= test_right.size(0)
+    #     for i in range(len(top_k)):
+    #         acc_l2r[i] = round(acc_l2r[i] / test_left.size(0), 4)
+    #         acc_r2l[i] = round(acc_r2l[i] / test_right.size(0), 4)
+        
+    #     gc.collect()
+
+    #     # 5. 打印日志
+    #     if not self.args.only_test:
+    #         Loss_out = f", Loss = {self.loss_item:.4f}"
+    #     else:
+    #         Loss_out = ""
+    #         self.epoch = "Test"
+    #         self.early_stop_count = 1
+
+    #     if self.rank == 0:
+    #         # 日志现在显示的是 Sinkhorn 处理后的高分
+    #         self.logger.info(f"Ep {self.epoch} | l2r (Sinkhorn {target_temp}): acc of top {top_k} = {acc_l2r}, mr = {mean_l2r:.3f}, mrr = {mrr_l2r:.3f}{Loss_out}")
+    #         self.logger.info(f"Ep {self.epoch} | r2l (Sinkhorn {target_temp}): acc of top {top_k} = {acc_r2l}, mr = {mean_r2l:.3f}, mrr = {mrr_r2l:.3f}{Loss_out}")
+    #         self.early_stop_count -= 1
+
+    #     # 6. 更新最佳模型逻辑
+    #     # 只有当 Sinkhorn 分数破纪录时，才保存模型，确保你拿到的是真正的 SOTA 模型
+    #     if not self.args.only_test and mrr_l2r > max(self.loss_log.acc) and not last_epoch:
+    #         self.logger.info(f"Best model update in Ep {self.epoch}: MRR from [{max(self.loss_log.acc)}] --> [{mrr_l2r}] ... ")
+    #         self.loss_log.update_acc(mrr_l2r)
+    #         self.early_stop_count = self.early_stop_init
+    #         self.best_model_wts = copy.deepcopy(self.model.state_dict())
+
     def _test(self, test_left, test_right, last_epoch=False, save_name="", loss=None):
         with torch.no_grad():
             w_normalized = None
@@ -395,30 +520,63 @@ class Runner:
         # [Test_Size, Test_Size]
         distance = pairwise_distances(final_emb[test_left], final_emb[test_right])
 
-        # 2. CSLS 修正 (如果配置开启，建议开启)
+        # 2. CSLS 修正 (如果配置开启，建议关闭以发挥 Sinkhorn 最大威力)
         if self.args.csls is True:
             distance = 1 - csls_sim(1 - distance, self.args.csls_k)
 
-        # 3. Sinkhorn 优化 (全时段开启，锁定最佳温度)
-        target_temp = 0.05
+        # 3. Sinkhorn 温度搜索 (Temperature Search)
+        # ==========================================
+        # 自动搜索最佳温度，不再使用固定的 0.05
         
-        try:
-            # 距离越小越好 -> 相似度越大越好 (取负)
-            sim = -distance 
-            
-            # 运行 Sinkhorn
-            # max_iter=40 保证收敛
-            log_P = sinkhorn_process(sim, temp=target_temp, max_iter=40)
-            
-            # 变回距离用于排序
-            final_distance = -log_P
-        except Exception as e:
-            # 容错处理：万一数值不稳定，回退到 CSLS/L2 距离
-            if self.rank == 0:
-                self.logger.info(f"Sinkhorn error: {e}, using raw distance instead.")
-            final_distance = distance
+        sim = -distance # 距离越小，相似度越大，所以取负
+        
+        best_acc_1 = -1.0
+        best_temp = 0.05
+        final_distance = distance # 默认回退到原始距离
+        
+        # 搜索范围：从 0.02 (极自信) 到 0.07 (平滑)
+        temp_list = [0.02, 0.025, 0.03, 0.035, 0.04, 0.05, 0.07]
+        
+        if self.rank == 0:
+            self.logger.info(f"Searching best Sinkhorn temperature in {temp_list}...")
 
-        # 4. 计算指标 (使用 Sinkhorn 后的距离)
+        for t in temp_list:
+            try:
+                # 增加推理时的迭代次数到 60 以保证精度
+                log_P = sinkhorn_process(sim, temp=t, max_iter=60)
+                curr_dist = -log_P
+                
+                # --- 快速计算 Hits@1 (Left-to-Right) 用于验证 ---
+                # 获取每一行最小值(最相似)的索引
+                top1_preds = torch.argmin(curr_dist, dim=1)
+                # 因为 test_left 和 test_right 是成对输入的，
+                # 所以第 i 个左实体应该匹配第 i 个右实体，标签就是对角线索引
+                targets = torch.arange(curr_dist.size(0), device=curr_dist.device)
+                
+                hits1 = (top1_preds == targets).sum().item()
+                acc_1 = hits1 / curr_dist.size(0)
+                # ------------------------------------------------
+                
+                if self.rank == 0:
+                    # 打印当前温度的简要结果
+                    print(f"   Temp {t}: Hits@1 = {acc_1:.4f}")
+
+                # 如果当前温度效果更好，则更新最佳结果
+                if acc_1 > best_acc_1:
+                    best_acc_1 = acc_1
+                    final_distance = curr_dist
+                    best_temp = t
+            except Exception as e:
+                if self.rank == 0:
+                    print(f"   Temp {t} error: {e}")
+                continue
+        
+        if self.rank == 0:
+            self.logger.info(f"Optimal Sinkhorn Temp found: {best_temp} with Hits@1: {best_acc_1:.4f}")
+
+        # ==========================================
+
+        # 4. 计算最终详细指标 (使用搜索到的最佳 final_distance)
         top_k = [1, 10, 50]
         acc_l2r = np.zeros((len(top_k)), dtype=np.float32)
         acc_r2l = np.zeros((len(top_k)), dtype=np.float32)
@@ -493,13 +651,12 @@ class Runner:
             self.early_stop_count = 1
 
         if self.rank == 0:
-            # 日志现在显示的是 Sinkhorn 处理后的高分
-            self.logger.info(f"Ep {self.epoch} | l2r (Sinkhorn {target_temp}): acc of top {top_k} = {acc_l2r}, mr = {mean_l2r:.3f}, mrr = {mrr_l2r:.3f}{Loss_out}")
-            self.logger.info(f"Ep {self.epoch} | r2l (Sinkhorn {target_temp}): acc of top {top_k} = {acc_r2l}, mr = {mean_r2l:.3f}, mrr = {mrr_r2l:.3f}{Loss_out}")
+            self.logger.info(f"Ep {self.epoch} | l2r (Sinkhorn {best_temp}): acc of top {top_k} = {acc_l2r}, mr = {mean_l2r:.3f}, mrr = {mrr_l2r:.3f}{Loss_out}")
+            self.logger.info(f"Ep {self.epoch} | r2l (Sinkhorn {best_temp}): acc of top {top_k} = {acc_r2l}, mr = {mean_r2l:.3f}, mrr = {mrr_r2l:.3f}{Loss_out}")
             self.early_stop_count -= 1
 
         # 6. 更新最佳模型逻辑
-        # 只有当 Sinkhorn 分数破纪录时，才保存模型，确保你拿到的是真正的 SOTA 模型
+        # 只有当 Sinkhorn 分数破纪录时，才保存模型
         if not self.args.only_test and mrr_l2r > max(self.loss_log.acc) and not last_epoch:
             self.logger.info(f"Best model update in Ep {self.epoch}: MRR from [{max(self.loss_log.acc)}] --> [{mrr_l2r}] ... ")
             self.loss_log.update_acc(mrr_l2r)

@@ -10,7 +10,7 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 python  main.py \
             --lr            2e-4  \
             --hidden_units  "300,300,300" \
             --save_model    1 \
-            --batch_size    3500 \
+            --batch_size    2250 \
 	        --csls          \
 	        --csls_k        3 \
 	        --random_seed   42 \
@@ -25,7 +25,7 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 python  main.py \
             --name_dim      300     \
             --char_dim      300     \
             --hidden_size   300     \
-            --tau           0.07     \
+            --tau           0.1     \
             --structure_encoder "gat" \
             --num_attention_heads 1 \
             --num_hidden_layers 1 \
@@ -36,4 +36,4 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 python  main.py \
             --use_intermediate 1   \
             --enable_sota \
             --replay 0 \
-            --w_hypergraph 1 \
+            --w_hypergraph 0

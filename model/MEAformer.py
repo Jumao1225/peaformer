@@ -82,7 +82,7 @@ class MEAformer(nn.Module):
 
         # 初始化 Sinkhorn Loss
         # 建议 tau 设为 0.1 或 0.05，n_iter 设为 3 或 5 即可（太大会减慢训练）
-        self.sinkhorn_loss_fn = SinkhornLoss(tau=0.05, n_iter=3)
+        self.sinkhorn_loss_fn = SinkhornLoss(tau=0.05, n_iter=10)
 
     def forward(self, batch):
         gph_emb, img_emb, rel_emb, att_emb, name_emb, char_emb, joint_emb, hidden_states = self.joint_emb_generat(only_joint=False)
@@ -172,6 +172,43 @@ class MEAformer(nn.Module):
         }
         output = {"loss_dic": loss_dic, "emb": joint_emb}
         return loss_all, output
+
+    def calculate_gated_conflict_loss(self, gph_emb, img_emb):
+        """
+        升级版：Top-K 动态门控。
+        不依赖固定阈值，而是每个 Batch 动态选取相似度最高的 60% 样本。
+        这能保证在训练的任何阶段，模型都只学习“最自信”的那部分对齐关系。
+        """
+        if gph_emb is not None and img_emb is not None:
+            # 1. 归一化
+            g_norm = F.normalize(gph_emb, p=2, dim=1)
+            i_norm = F.normalize(img_emb, p=2, dim=1)
+            
+            # 2. 计算余弦相似度 (detach，不传导梯度)
+            with torch.no_grad():
+                consistency = F.cosine_similarity(g_norm, i_norm, dim=1)
+            
+            # 3. 动态计算 Top-K 阈值 (选取前 60% 的样本)
+            # Batch=3500 时，k ≈ 2100，确保排除掉那 15% 的噪声和 25% 的模棱两可样本
+            ratio = 0.6 
+            k = int(consistency.shape[0] * ratio)
+            if k < 1: k = 1
+            
+            # 获取第 k 大的相似度值作为本 Batch 的动态阈值
+            topk_val, _ = torch.topk(consistency, k)
+            threshold = topk_val[-1] # 第 k 个值
+            
+            # 4. 生成硬门控 (Hard Gate)
+            # 高于动态阈值的设为 1，否则为 0
+            mask = (consistency >= threshold).float()
+            
+            # 5. 计算 Loss (只优化 Top 60%)
+            # 1 - Cosine Similarity
+            dist = 1 - F.cosine_similarity(g_norm, i_norm, dim=1)
+            
+            return torch.mean(dist * mask)
+            
+        return torch.tensor(0.0).to(self.args.device)
 
     # === [新增: InfoNCE 实现] ===
     def compute_contrastive_loss(self, feat1, feat2, batch):
