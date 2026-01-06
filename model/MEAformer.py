@@ -26,10 +26,10 @@ class MEAformer(nn.Module):
         self.adj = kgs["adj"].cuda()
 
         # === [新增] ===
-        if "vis_adj" in kgs:
-            self.vis_adj = kgs["vis_adj"].cuda()
-        else:
-            self.vis_adj = None
+        # if "vis_adj" in kgs:
+        #     self.vis_adj = kgs["vis_adj"].cuda()
+        # else:
+        #     self.vis_adj = None
         # =============
 
         # # ========= [NEW] Load Hypergraph Matrix =========
@@ -38,8 +38,8 @@ class MEAformer(nn.Module):
         # else:
         #     self.hyper_adj = None
         # # ================================================
-        if "hyper_adj" in kgs:
-            self.hyper_adj = kgs["hyper_adj"].cuda()
+        # if "hyper_adj" in kgs:
+        #     self.hyper_adj = kgs["hyper_adj"].cuda()
         
         # 增加一个 Temperature 参数用于 InfoNCE
         self.logit_scale = nn.Parameter(torch.ones([]) * np.log(1 / 0.05))
@@ -334,8 +334,8 @@ class MEAformer(nn.Module):
                                                                                                 self.rel_features,
                                                                                                 self.att_features,
                                                                                                 self.name_features,
-                                                                                                self.char_features,
-                                                                                                self.hyper_adj
+                                                                                                self.char_features
+                                                                                                #self.hyper_adj
                                                                                                )
         # if only_joint:
         #     return joint_emb, weight_norm
@@ -343,9 +343,9 @@ class MEAformer(nn.Module):
         #     return gph_emb, img_emb, rel_emb, att_emb, name_emb, char_emb, joint_emb, hidden_states
     
         # 检查是否定义了 self.hyper_adj，如果没有定义，尝试用 vis_adj 或者 None
-        h_adj = getattr(self, 'hyper_adj', None)
-        if h_adj is None:
-             h_adj = getattr(self, 'vis_adj', None) # 兼容之前的命名
+        # h_adj = getattr(self, 'hyper_adj', None)
+        # if h_adj is None:
+        #      h_adj = getattr(self, 'vis_adj', None) # 兼容之前的命名
         
         ret_tuple = self.multimodal_encoder(
             self.input_idx, 
@@ -355,7 +355,7 @@ class MEAformer(nn.Module):
             self.att_features,
             self.name_features, 
             self.char_features,
-            hyper_adj=h_adj,
+            #hyper_adj=h_adj,
             topo_features=self.topo_features
         )
         

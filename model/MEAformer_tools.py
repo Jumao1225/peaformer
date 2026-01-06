@@ -17,10 +17,12 @@ from transformers.activations import ACT2FN
 from transformers.pytorch_utils import apply_chunking_to_forward
 
 from .layers import ProjectionHead
-from .layers import ProjectionHead, HypergraphConv
+# from .layers import ProjectionHead, HypergraphConv
 from .Tool_model import GAT, GCN
 import pdb
 
+
+from torch.utils.checkpoint import checkpoint
 
 class MformerFusion(nn.Module):
     def __init__(self, args, modal_num, with_weight=1):
@@ -122,7 +124,7 @@ class MultiModalEncoder(nn.Module):
         # 解析参数
         self.n_units = [int(x) for x in self.args.hidden_units.strip().split(",")]
         self.n_heads = [int(x) for x in self.args.heads.strip().split(",")]
-        self.input_dim = int(self.args.hidden_units.strip().split(",")[0])
+        self.input_dim = int(self.args.hidden_units.strip().split(",")[0])  
         self.ENT_NUM = ent_num
 
         # 实体 Embedding
@@ -134,7 +136,7 @@ class MultiModalEncoder(nn.Module):
         self.rel_fc = nn.Linear(1000, attr_dim)
         self.att_fc = nn.Linear(attr_input_dim, attr_dim)
         self.img_fc = nn.Linear(img_feature_dim, img_dim)
-        self.name_fc = nn.Linear(768, char_dim) # LaBSE 维度
+        self.name_fc = nn.Linear(300, char_dim)
         self.char_fc = nn.Linear(char_feature_dim, char_dim)
        
         # ============================================================
@@ -178,8 +180,8 @@ class MultiModalEncoder(nn.Module):
 
         # 2. [关键修复] 超图编码器 (HypergraphConv)
         # 专门处理 N x 3000 的矩阵
-        if self.args.w_hypergraph:
-            self.hyper_graph_model = HypergraphConv(self.input_dim, attr_dim, dropout=self.args.hyper_dropout)
+        # if self.args.w_hypergraph:
+        #     self.hyper_graph_model = HypergraphConv(self.input_dim, attr_dim, dropout=self.args.hyper_dropout)
 
         # # === [新增] 自适应门控层 ===
         #     # 输入是 主图特征 + 超图特征 (拼接)
@@ -205,17 +207,17 @@ class MultiModalEncoder(nn.Module):
             # 输入: [N, attr_dim * 2]
             # 输出: [N, attr_dim] (不再是 1，而是和特征维度一样大)
             # 让模型为每一个特征维度打分
-            self.channel_gate = nn.Sequential(
-                nn.Linear(attr_dim * 2, attr_dim), # 降维融合
-                nn.ReLU(),
-                nn.Linear(attr_dim, attr_dim),     # 映射回特征维度
-                nn.Sigmoid()                       # 0~1 的权重向量
-            )
+            # self.channel_gate = nn.Sequential(
+            #     nn.Linear(attr_dim * 2, attr_dim), # 降维融合
+            #     nn.ReLU(),
+            #     nn.Linear(attr_dim, attr_dim),     # 映射回特征维度
+            #     nn.Sigmoid()                       # 0~1 的权重向量
+            # )
             
             # === [新增: 层归一化] ===
             # 在融合前对两个模态做 Norm，防止幅值差异过大导致某一方主导
-            self.norm_gph = nn.LayerNorm(attr_dim)
-            self.norm_hyper = nn.LayerNorm(attr_dim)
+            # self.norm_gph = nn.LayerNorm(attr_dim)
+            # self.norm_hyper = nn.LayerNorm(attr_dim)
             # ==========================================
 
         # 融合层
@@ -240,48 +242,37 @@ class MultiModalEncoder(nn.Module):
 
         # 2. [关键修复] 超图特征计算
         # 使用 HypergraphConv 处理 hyper_adj
-        if self.args.w_hypergraph and hyper_adj is not None:
-            hyper_emb = self.hyper_graph_model(self.entity_emb(input_idx), hyper_adj)
-            
-            # # 残差融合：把超图信息加到主图上
-            # if gph_emb is not None:
-            #     gph_emb = gph_emb + 0.3 * hyper_emb
-            # else:
-            #     gph_emb = hyper_emb
-        
-            # if gph_emb is not None:
-            #     # === [修改: 门控融合] ===
-            #     # 拼接两个特征 [N, dim*2]
-            #     cat_emb = torch.cat([gph_emb, hyper_emb], dim=1)
-                
-            #     # 计算每个实体的专属权重 alpha: [N, 1]
-            #     alpha = self.gate_fc(cat_emb)
-                
-            #     # 加权融合: 原图 + alpha * 超图
-            #     # 这样，如果图片是噪音，alpha 会趋近于 0，不干扰主图
-            #     gph_emb = gph_emb + alpha * hyper_emb
-            # else:
-            #     gph_emb = hyper_emb
+        # if self.args.w_hypergraph and hyper_adj is not None:
+        #     hyper_emb = self.hyper_graph_model(self.entity_emb(input_idx), hyper_adj)
 
-            if gph_emb is not None:
-                # === [修改 2: 归一化 + 通道融合] ===
-                # 先做 LayerNorm，统一尺度
-                g_norm = self.norm_gph(gph_emb)
-                h_norm = self.norm_hyper(hyper_emb)
+        #     # === 修改为使用 checkpoint ===
+        #     # 注意：checkpoint 要求输入必须设置 requires_grad=True 才能生效
+        #     # entity_emb 通常是可导的，所以直接包起来即可
+        #     def run_hyper(x, adj):
+        #          return self.hyper_graph_model(x, adj)
+                 
+        #     hyper_emb = checkpoint(run_hyper, self.entity_emb(input_idx), hyper_adj)
+        #     # ===========================
+
+        #     if gph_emb is not None:
+        #         # === [修改 2: 归一化 + 通道融合] ===
+        #         # 先做 LayerNorm，统一尺度
+        #         g_norm = self.norm_gph(gph_emb)
+        #         h_norm = self.norm_hyper(hyper_emb)
                 
-                # 拼接
-                cat_emb = torch.cat([g_norm, h_norm], dim=1)
+        #         # 拼接
+        #         cat_emb = torch.cat([g_norm, h_norm], dim=1)
                 
-                # 计算通道权重向量: [N, attr_dim]
-                # 例如: [0.1, 0.9, 0.05, ...] 表示第2维很重要，第1、3维是噪音
-                channel_weight = self.channel_gate(cat_emb)
+        #         # 计算通道权重向量: [N, attr_dim]
+        #         # 例如: [0.1, 0.9, 0.05, ...] 表示第2维很重要，第1、3维是噪音
+        #         channel_weight = self.channel_gate(cat_emb)
                 
-                # 逐元素相乘 (Element-wise Product)
-                # 这比简单的标量乘法强大得多
-                # 残差连接
-                gph_emb = gph_emb + channel_weight * hyper_emb
-            else:
-                gph_emb = hyper_emb
+        #         # 逐元素相乘 (Element-wise Product)
+        #         # 这比简单的标量乘法强大得多
+        #         # 残差连接
+        #         gph_emb = gph_emb + channel_weight * hyper_emb
+        #     else:
+        #         gph_emb = hyper_emb
 
         # === [新增: 编码拓扑特征] ===
         if topo_features is not None:

@@ -109,11 +109,11 @@ class cfg():
         parser.add_argument("--replay", type=int, default=0, help="whether to use replay strategy")
         parser.add_argument("--neg_cross_kg", type=int, default=0, help="whether to force the negative samples in the opposite KG")
 
-        # ========= [NEW] HyDRA-inspired Arguments =========
-        parser.add_argument("--w_hypergraph", type=int, default=1, help="Whether to use Hypergraph Convolution (1 for True)")
-        parser.add_argument("--hyper_dropout", type=float, default=0.3, help="Dropout for hypergraph layer")
+        # # ========= [NEW] HyDRA-inspired Arguments =========
+        # parser.add_argument("--w_hypergraph", type=int, default=1, help="Whether to use Hypergraph Convolution (1 for True)")
+        # parser.add_argument("--hyper_dropout", type=float, default=0.3, help="Dropout for hypergraph layer")
         parser.add_argument("--conflict_weight", type=float, default=0.5, help="Weight for the cross-modal conflict detection loss")
-        # ==================================================
+        # # ==================================================
 
         # --------- MSNEA -----------
         parser.add_argument("--dim", type=int, default=100, help="the hidden size of MSNEA")

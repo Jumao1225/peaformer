@@ -255,33 +255,33 @@ class ProjectionHead(nn.Module):
 # # ======================================================
 
 
-class HypergraphConv(nn.Module):
-    def __init__(self, in_features, out_features, dropout=0.5):
-        super(HypergraphConv, self).__init__()
-        self.W_hyper = nn.Linear(in_features, out_features)
-        self.dropout = dropout
-        self.reset_parameters()
+# class HypergraphConv(nn.Module):
+#     def __init__(self, in_features, out_features, dropout=0.5):
+#         super(HypergraphConv, self).__init__()
+#         self.W_hyper = nn.Linear(in_features, out_features)
+#         self.dropout = dropout
+#         self.reset_parameters()
 
-    def reset_parameters(self):
-        stdv = 1. / math.sqrt(self.W_hyper.weight.size(1))
-        self.W_hyper.weight.data.uniform_(-stdv, stdv)
+#     def reset_parameters(self):
+#         stdv = 1. / math.sqrt(self.W_hyper.weight.size(1))
+#         self.W_hyper.weight.data.uniform_(-stdv, stdv)
 
-    def forward(self, x, H):
-        # H: [N, M]
-        # 1. Node -> Edge
-        hyperedge_feat = torch.matmul(H.t(), x)
-        # Norm
-        edge_deg = H.sum(dim=0, keepdim=True).clamp(min=1e-5)
-        hyperedge_feat = hyperedge_feat / edge_deg.t()
+#     def forward(self, x, H):
+#         # H: [N, M]
+#         # 1. Node -> Edge
+#         hyperedge_feat = torch.matmul(H.t(), x)
+#         # Norm
+#         edge_deg = H.sum(dim=0, keepdim=True).clamp(min=1e-5)
+#         hyperedge_feat = hyperedge_feat / edge_deg.t()
         
-        # Transform
-        hyperedge_feat = self.W_hyper(hyperedge_feat)
-        hyperedge_feat = F.relu(hyperedge_feat)
-        hyperedge_feat = F.dropout(hyperedge_feat, self.dropout, training=self.training)
+#         # Transform
+#         hyperedge_feat = self.W_hyper(hyperedge_feat)
+#         hyperedge_feat = F.relu(hyperedge_feat)
+#         hyperedge_feat = F.dropout(hyperedge_feat, self.dropout, training=self.training)
         
-        # 2. Edge -> Node
-        node_feat = torch.matmul(H, hyperedge_feat)
-        node_deg = H.sum(dim=1, keepdim=True).clamp(min=1e-5)
-        node_feat = node_feat / node_deg
+#         # 2. Edge -> Node
+#         node_feat = torch.matmul(H, hyperedge_feat)
+#         node_deg = H.sum(dim=1, keepdim=True).clamp(min=1e-5)
+#         node_feat = node_feat / node_deg
         
-        return node_feat
+#         return node_feat
