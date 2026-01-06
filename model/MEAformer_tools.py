@@ -124,13 +124,22 @@ class MultiModalEncoder(nn.Module):
         # 解析参数
         self.n_units = [int(x) for x in self.args.hidden_units.strip().split(",")]
         self.n_heads = [int(x) for x in self.args.heads.strip().split(",")]
-        self.input_dim = int(self.args.hidden_units.strip().split(",")[0])  
+        self.input_dim = int(self.args.hidden_units.strip().split(",")[0])
         self.ENT_NUM = ent_num
 
-        # 实体 Embedding
+        # 实体 Embedding  
         self.entity_emb = nn.Embedding(self.ENT_NUM, self.input_dim)
         nn.init.normal_(self.entity_emb.weight, std=1.0 / math.sqrt(self.ENT_NUM))
         self.entity_emb.requires_grad = True
+
+        # # === [修改 1] 初始化关系注意力模块 ===
+        # # 假设 src/data.py 中 topR=1000，这里对应输入维度就是 1000
+        # # 如果你修改了 topR，这里也要对应修改
+        # REL_DIM = 1000 
+        # if self.args.w_rel:
+        #     self.rel_attn = RelationAttention(REL_DIM, reduction=8) # reduction越小参数越多，8是个不错的平衡
+        #     self.rel_fc = nn.Linear(REL_DIM, attr_dim)
+        # # ==================================
 
         # 线性层
         self.rel_fc = nn.Linear(1000, attr_dim)
@@ -299,6 +308,15 @@ class MultiModalEncoder(nn.Module):
             rel_emb = self.rel_fc(rel_features)
         else:
             rel_emb = None
+        # # === [修改 2] 应用关系注意力 ===
+        # if self.args.w_rel:
+        #     # 1. 先通过 Attention 计算加权后的特征
+        #     weighted_rel_features = self.rel_attn(rel_features)
+        #     # 2. 再通过 FC 映射到隐藏空间
+        #     rel_emb = self.rel_fc(weighted_rel_features)
+        # else:
+        #     rel_emb = None
+        # ============================
         if self.args.w_attr:
             #att_emb = self.att_fc(att_features)
             # 1. 原始属性特征
@@ -428,3 +446,25 @@ class BertLayer(nn.Module):
         layer_output = self.output(intermediate_output, attention_output)
         return layer_output
         # return attention_output
+
+# class RelationAttention(nn.Module):
+#     """
+#     关系注意力模块 (SE-Block style)
+#     输入: [Batch, Rel_Dim] (例如 1000维的关系统计向量)
+#     输出: [Batch, Rel_Dim] (加权后的向量)
+#     作用: 动态学习每个关系的重要性，抑制常见但无用的关系(如 is_a)，放大稀有但关键的关系。
+#     """
+#     def __init__(self, in_dim, reduction=4):
+#         super(RelationAttention, self).__init__()
+#         self.gate = nn.Sequential(
+#             nn.Linear(in_dim, in_dim // reduction),
+#             nn.ReLU(),
+#             nn.Linear(in_dim // reduction, in_dim),
+#             nn.Sigmoid()
+#         )
+
+#     def forward(self, x):
+#         # x: [Batch, Rel_Dim]
+#         # weights: [Batch, Rel_Dim] (0~1 之间的权重)
+#         weights = self.gate(x)
+#         return x * weights

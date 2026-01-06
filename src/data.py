@@ -143,6 +143,58 @@ def load_eva_data(logger, args):
 
     eval_ill = None
     input_idx = torch.LongTensor(np.arange(ENT_NUM))
+
+    # === [新增: 动态图结构增强 (Visual Graph Augmentation)] ===
+    # 利用视觉特征补全图结构：如果两个节点图片很像，我们认为它们之间有一条潜在的边
+    if args.w_img: # 只有在使用图片时才开启
+        logger.info("Constructing Visual KNN Graph for Structure Augmentation...")
+        
+        # 1. 手动计算节点度数 (直接从 triples 统计，不依赖 adj)
+        # 这样避免了 UnboundLocalError，且度数更准确
+        node_degrees = np.zeros(ENT_NUM, dtype=np.int32)
+        for h, r, t in triples:
+            node_degrees[h] += 1
+            node_degrees[t] += 1
+            
+        # 2. 使用 KNN 寻找每个实体的视觉邻居
+        # k=2 表示找最相似的 2 个邻居 (可以调整，不宜过大，否则引入噪声)
+        k_neighbors = 1
+        nbrs = NearestNeighbors(n_neighbors=k_neighbors + 1, 
+                                algorithm='brute', 
+                                metric='cosine', 
+                                n_jobs=-1).fit(img_features)
+        distances, indices = nbrs.kneighbors(img_features)
+        
+        # 3. 筛选并添加边
+        # 只有度数 <= 2 的“孤僻节点”才允许加边
+        degree_threshold = 2
+        new_triples = []
+        dummy_relation = 0 # 虚拟关系ID
+        added_count = 0
+        
+        for i in range(ENT_NUM):
+            # 如果度数已经够大了，就不需要视觉增强了
+            if node_degrees[i] > degree_threshold:
+                continue
+                
+            for j in range(1, k_neighbors + 1):
+                neighbor_idx = indices[i][j]
+                dist = distances[i][j]
+                
+                # 双重保险：不仅要是低度节点，视觉距离还要足够近
+                # dist < 0.6 是一个经验阈值，确保非常相似
+                if dist < 0.6:
+                    new_triples.append((i, dummy_relation, neighbor_idx))
+                    new_triples.append((neighbor_idx, dummy_relation, i))
+                    added_count += 1
+                    
+        logger.info(f"Original edges: {len(triples)}")
+        logger.info(f"Augmented edges: {len(new_triples)} (Targeting low-degree nodes only)")
+        
+        # 将新边加入原始列表
+        triples += new_triples
+    # ========================================================
+    
     adj = get_adjr(ENT_NUM, triples, norm=True)
 
     # === [新增: 计算拓扑特征模态] ===
