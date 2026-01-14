@@ -24,22 +24,6 @@ class MEAformer(nn.Module):
         self.img_features = F.normalize(torch.FloatTensor(kgs["images_list"])).cuda()
         self.input_idx = kgs["input_idx"].cuda()
         self.adj = kgs["adj"].cuda()
-
-        # === [新增] ===
-        # if "vis_adj" in kgs:
-        #     self.vis_adj = kgs["vis_adj"].cuda()
-        # else:
-        #     self.vis_adj = None
-        # =============
-
-        # # ========= [NEW] Load Hypergraph Matrix =========
-        # if "hyper_adj" in kgs and kgs["hyper_adj"] is not None:
-        #     self.hyper_adj = kgs["hyper_adj"].cuda()
-        # else:
-        #     self.hyper_adj = None
-        # # ================================================
-        # if "hyper_adj" in kgs:
-        #     self.hyper_adj = kgs["hyper_adj"].cuda()
         
         # 增加一个 Temperature 参数用于 InfoNCE
         self.logit_scale = nn.Parameter(torch.ones([]) * np.log(1 / 0.05))
@@ -64,6 +48,12 @@ class MEAformer(nn.Module):
                                                     attr_input_dim=kgs["att_features"].shape[1])
 
         self.multi_loss_layer = CustomMultiLossLayer(loss_num=6)  # 6
+        # 实例化一个专门管理 Sinkhorn Loss 的自动权重层
+        # loss_num=1，因为我们只把 Sinkhorn Loss 传给它
+        # 由于我们在 CustomMultiLossLayer 里写了 init_values[-1]=-4.6，
+        # 即使只有一个元素，它也会被初始化为 -4.6 (即权重100)
+        self.sinkhorn_weight_layer = CustomMultiLossLayer(loss_num=1)
+        # =================
         self.criterion_cl = icl_loss(tau=self.args.tau, ab_weight=self.args.ab_weight, n_view=2)
         self.criterion_cl_joint = icl_loss(tau=self.args.tau, ab_weight=self.args.ab_weight, n_view=2, replay=self.args.replay, neg_cross_kg=self.args.neg_cross_kg)
 
@@ -81,7 +71,6 @@ class MEAformer(nn.Module):
             self.topo_features = None
 
         # 初始化 Sinkhorn Loss
-        # 建议 tau 设为 0.1 或 0.05，n_iter 设为 3 或 5 即可（太大会减慢训练）
         self.sinkhorn_loss_fn = SinkhornLoss(tau=0.05, n_iter=10)
 
     def forward(self, batch):
@@ -124,24 +113,14 @@ class MEAformer(nn.Module):
             loss_joi = self.criterion_cl_joint(joint_emb, batch)
 
         in_loss = self.inner_view_loss(gph_emb, rel_emb, att_emb, img_emb, name_emb, char_emb, batch)
-        out_loss = self.inner_view_loss(gph_emb_hid, rel_emb_hid, att_emb_hid, img_emb_hid, name_emb_hid, char_emb_hid, batch)
-
-        # ========= [NEW] Conflict Detection Loss =========
-        # Calculate consistency/conflict loss between key modalities (e.g., Graph vs Image)
-        # We want to minimize the divergence between modalities for positive pairs (implicitly handled by contrastive)
-        # But here we add an explicit consistency regularizer for the batch
-        loss_conflict = self.calculate_conflict_loss(gph_emb, img_emb)
+        out_loss = self.inner_view_loss(gph_emb_hid, rel_emb_hid, att_emb_hid, img_emb_hid, name_emb_hid, char_emb_hid, batch)        
 
         # === [修改点: 跨模态 InfoNCE Loss] ===
         # 计算 Graph 和 Image 之间的对比损失
         # 目标: 同一实体的 Graph 和 Image 特征要尽量相似，不同实体的要尽量不相似
         loss_cl_cross = self.compute_contrastive_loss(gph_emb, img_emb, batch)
         
-        #loss_all = loss_joi + in_loss + out_loss + self.args.conflict_weight * loss_conflict
         #loss_all = loss_joi + in_loss + out_loss + self.args.conflict_weight * loss_cl_cross
-        
-        # =================================================  
-        #loss_all = loss_joi + in_loss + out_loss
 
         # === [新增] 计算 Sinkhorn Training Loss ===
         # 1. 获取当前 Batch 对应的左右实体 Embedding
@@ -158,57 +137,21 @@ class MEAformer(nn.Module):
         loss_sinkhorn = self.sinkhorn_loss_fn(emb_left, emb_right)
         # =========================================
 
-        sinkhorn_weight = 100.0 
+        #sinkhorn_weight = 1.0
+        weighted_sinkhorn_loss = self.sinkhorn_weight_layer([loss_sinkhorn])
         
         loss_all = loss_joi + in_loss + out_loss + \
                    self.args.conflict_weight * loss_cl_cross + \
-                   sinkhorn_weight * loss_sinkhorn
+                   weighted_sinkhorn_loss
 
         #loss_dic = {"joint_Intra_modal": loss_joi.item(), "Intra_modal": in_loss.item()}
         loss_dic = {
             "joint_Intra_modal": loss_joi.item(), 
             "Intra_modal": in_loss.item(),
-            "Sinkhorn": loss_sinkhorn.item() # 记录一下
+            "Sinkhorn": loss_sinkhorn.item()
         }
         output = {"loss_dic": loss_dic, "emb": joint_emb}
         return loss_all, output
-
-    def calculate_gated_conflict_loss(self, gph_emb, img_emb):
-        """
-        升级版：Top-K 动态门控。
-        不依赖固定阈值，而是每个 Batch 动态选取相似度最高的 60% 样本。
-        这能保证在训练的任何阶段，模型都只学习“最自信”的那部分对齐关系。
-        """
-        if gph_emb is not None and img_emb is not None:
-            # 1. 归一化
-            g_norm = F.normalize(gph_emb, p=2, dim=1)
-            i_norm = F.normalize(img_emb, p=2, dim=1)
-            
-            # 2. 计算余弦相似度 (detach，不传导梯度)
-            with torch.no_grad():
-                consistency = F.cosine_similarity(g_norm, i_norm, dim=1)
-            
-            # 3. 动态计算 Top-K 阈值 (选取前 60% 的样本)
-            # Batch=3500 时，k ≈ 2100，确保排除掉那 15% 的噪声和 25% 的模棱两可样本
-            ratio = 0.6 
-            k = int(consistency.shape[0] * ratio)
-            if k < 1: k = 1
-            
-            # 获取第 k 大的相似度值作为本 Batch 的动态阈值
-            topk_val, _ = torch.topk(consistency, k)
-            threshold = topk_val[-1] # 第 k 个值
-            
-            # 4. 生成硬门控 (Hard Gate)
-            # 高于动态阈值的设为 1，否则为 0
-            mask = (consistency >= threshold).float()
-            
-            # 5. 计算 Loss (只优化 Top 60%)
-            # 1 - Cosine Similarity
-            dist = 1 - F.cosine_similarity(g_norm, i_norm, dim=1)
-            
-            return torch.mean(dist * mask)
-            
-        return torch.tensor(0.0).to(self.args.device)
 
     # === [新增: InfoNCE 实现] ===
     def compute_contrastive_loss(self, feat1, feat2, batch):
@@ -244,57 +187,7 @@ class MEAformer(nn.Module):
         loss_i = F.cross_entropy(logits, labels)
         loss_t = F.cross_entropy(logits.t(), labels)
         
-        return (loss_i + loss_t) / 2
-
-    # # ========= [NEW] Conflict Loss Function =========
-    # def calculate_conflict_loss(self, gph_emb, img_emb, rel_emb):
-    #     """
-    #     Computes the variance/disagreement between modalities.
-    #     HyDRA uses this to detect noisy/conflicting modalities.
-    #     We minimize the distance from the mean embedding to enforce consistency.
-    #     """
-    #     valid_embs = []
-    #     if gph_emb is not None: valid_embs.append(gph_emb)
-    #     if img_emb is not None: valid_embs.append(img_emb)
-    #     if rel_emb is not None: valid_embs.append(rel_emb)
-        
-    #     if len(valid_embs) < 2:
-    #         return torch.tensor(0.0).cuda()
-            
-    #     # Stack: [Batch, Num_Modals, Dim]
-    #     stack = torch.stack(valid_embs, dim=1)
-        
-    #     # Mean embedding (Consensus)
-    #     mean_emb = torch.mean(stack, dim=1, keepdim=True)
-        
-    #     # Calculate L2 distance of each modality from the mean
-    #     # Loss = Mean of distances
-    #     dist = torch.norm(stack - mean_emb, p=2, dim=-1) # [Batch, Num_Modals]
-    #     loss = torch.mean(dist)
-        
-    #     return loss
-    # # ================================================
-    def calculate_conflict_loss(self, gph_emb, img_emb):
-        """
-        专门针对无 Surface 场景优化：
-        只计算 Graph 和 Image 的冲突，因为这是剩下的最强模态。
-        """
-        if gph_emb is not None and img_emb is not None:
-            # 计算 Graph Embedding 和 Image Embedding 的距离
-            # 我们希望同一个实体的 图特征 和 视觉特征 在高层语义上是对齐的
-            
-            # 1. 归一化 (确保在同一尺度)
-            g_norm = F.normalize(gph_emb, p=2, dim=1)
-            i_norm = F.normalize(img_emb, p=2, dim=1)
-            
-            # 2. 计算 L2 距离 (或者 1 - Cosine)
-            # 距离越大，冲突越大 -> Loss 越大
-            diff = torch.norm(g_norm - i_norm, p=2, dim=1)
-            
-            # 3. 返回平均 Loss
-            return torch.mean(diff)
-            
-        return torch.tensor(0.0).cuda()
+        return (loss_i + loss_t) / 2    
 
     def generate_hidden_emb(self, hidden):
         gph_emb = F.normalize(hidden[:, 0, :].squeeze(1))
@@ -327,25 +220,6 @@ class MEAformer(nn.Module):
     # --------- necessary ---------------
 
     def joint_emb_generat(self, only_joint=True):
-        gph_emb, img_emb, rel_emb, att_emb, \
-            name_emb, char_emb, joint_emb, hidden_states, weight_norm = self.multimodal_encoder(self.input_idx,
-                                                                                                self.adj,
-                                                                                                self.img_features,
-                                                                                                self.rel_features,
-                                                                                                self.att_features,
-                                                                                                self.name_features,
-                                                                                                self.char_features
-                                                                                                #self.hyper_adj
-                                                                                               )
-        # if only_joint:
-        #     return joint_emb, weight_norm
-        # else:
-        #     return gph_emb, img_emb, rel_emb, att_emb, name_emb, char_emb, joint_emb, hidden_states
-    
-        # 检查是否定义了 self.hyper_adj，如果没有定义，尝试用 vis_adj 或者 None
-        # h_adj = getattr(self, 'hyper_adj', None)
-        # if h_adj is None:
-        #      h_adj = getattr(self, 'vis_adj', None) # 兼容之前的命名
         
         ret_tuple = self.multimodal_encoder(
             self.input_idx, 
@@ -355,15 +229,12 @@ class MEAformer(nn.Module):
             self.att_features,
             self.name_features, 
             self.char_features,
-            #hyper_adj=h_adj,
             topo_features=self.topo_features
         )
         
         # 解包
         gph_emb = ret_tuple[0]
-        # ...
         joint_emb = ret_tuple[6]
-        # ...
         
         if only_joint:
             return joint_emb, ret_tuple[-1] # weight_norm

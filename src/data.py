@@ -234,48 +234,6 @@ def load_eva_data(logger, args):
     logger.info(f"Topology Features Generated. Shape: {topo_features.shape}")
     # ================================
 
-    # # # ========= [NEW] Construct Hypergraph Incidence Matrix =========
-    # # # We use the attribute matrix as the incidence matrix H.
-    # # # Rows are entities, Columns are attributes (hyperedges).
-    # # # att_features is currently a numpy array (N, A).
-    # # # We convert it to a Tensor here for the model.
-    # # logger.info("Constructing Hypergraph...") # 建议加这一句便于调试
-    
-    # # hyper_adj = torch.FloatTensor(att_features)
-    # # # =============================================================
-    
-    # # # pdb.set_trace()
-    # # train_ill = EADataset(train_ill)
-    # # test_ill = EADataset(test_ill)
-
-    # logger.info("Constructing Visual-Attribute Dual Hypergraph...")
-    
-    # # 2. 构建属性超边 (Attribute Hyperedges)
-    # # att_features: [N, 1000]
-    # indices_att = torch.FloatTensor(att_features).nonzero(as_tuple=False)
-    # # 构造稀疏张量以节省内存 (如果 att_features 很大)
-    # # 或者直接用 Dense，取决于你的显存。这里为了稳妥用 Dense 拼接
-    # attr_tensor = torch.FloatTensor(att_features)
-    
-    # # 3. 构建视觉超边 (Visual Cluster Hyperedges)
-    # # 将视觉特征聚类，把“长得像”的实体归为一个超边
-    # # 聚类数 K=2000，模拟 Visual Words
-    # #n_vis_clusters = 2000
-    # n_vis_clusters = 5000
-    # kmeans = MiniBatchKMeans(n_clusters=n_vis_clusters, batch_size=4096, random_state=42).fit(img_features)
-    # vis_labels = kmeans.labels_
-    
-    # # 构建视觉关联矩阵 [N, 2000]
-    # vis_adj = torch.zeros(ENT_NUM, n_vis_clusters)
-    # vis_adj[torch.arange(ENT_NUM), torch.tensor(vis_labels)] = 1.0
-    
-    # # 4. 强强联合：拼接属性和视觉
-    # # final H: [N, 1000 + 2000]
-    # # 这样 HypergraphConv 既能看到“属性相同”的邻居，也能看到“长得像”的邻居
-    # hyper_adj = torch.cat([attr_tensor, vis_adj], dim=1)
-    
-    # logger.info(f"Dual Hypergraph Constructed. Shape: {hyper_adj.shape}")
-
     train_ill = EADataset(train_ill)
     test_ill = EADataset(test_ill)
 
@@ -289,7 +247,6 @@ def load_eva_data(logger, args):
         'char_features': char_features,
         'input_idx': input_idx,
         'adj': adj,
-        #'hyper_adj': hyper_adj,
         'topo_features': topo_features
     }, {"left": left_non_train, "right": right_non_train}, train_ill, test_ill, eval_ill, test_ill_
 
@@ -387,6 +344,7 @@ def load_word_char_features(node_size, word2vec_path, args, logger):
         pickle.dump(char_vec, f)
     logger.info("save entity emb done. ")
     return ent_vec, char_vec
+    
 # def load_word_char_features(node_size, word2vec_path, args, logger):
 #     """
 #     使用 LaBSE 替换 GloVe 生成实体名称的 Embedding
@@ -427,40 +385,39 @@ def load_word_char_features(node_size, word2vec_path, args, logger):
 #     char_vec = np.zeros((node_size, 10)) # 占位
 #     return ent_vec, char_vec
 
+def visual_pivot_induction(args, left_ents, right_ents, img_features, ills, logger):
 
-# def visual_pivot_induction(args, left_ents, right_ents, img_features, ills, logger):
+    l_img_f = img_features[left_ents]  # left images
+    r_img_f = img_features[right_ents]  # right images
 
-#     l_img_f = img_features[left_ents]  # left images
-#     r_img_f = img_features[right_ents]  # right images
+    img_sim = l_img_f.mm(r_img_f.t())
+    topk = args.unsup_k
+    two_d_indices = get_topk_indices(img_sim, topk * 100)
+    del l_img_f, r_img_f, img_sim
 
-#     img_sim = l_img_f.mm(r_img_f.t())
-#     topk = args.unsup_k
-#     two_d_indices = get_topk_indices(img_sim, topk * 100)
-#     del l_img_f, r_img_f, img_sim
+    visual_links = []
+    used_inds = []
+    count = 0
+    for ind in two_d_indices:
+        if left_ents[ind[0]] in used_inds:
+            continue
+        if right_ents[ind[1]] in used_inds:
+            continue
+        used_inds.append(left_ents[ind[0]])
+        used_inds.append(right_ents[ind[1]])
+        visual_links.append((left_ents[ind[0]], right_ents[ind[1]]))
+        count += 1
+        if count == topk:
+            break
 
-#     visual_links = []
-#     used_inds = []
-#     count = 0
-#     for ind in two_d_indices:
-#         if left_ents[ind[0]] in used_inds:
-#             continue
-#         if right_ents[ind[1]] in used_inds:
-#             continue
-#         used_inds.append(left_ents[ind[0]])
-#         used_inds.append(right_ents[ind[1]])
-#         visual_links.append((left_ents[ind[0]], right_ents[ind[1]]))
-#         count += 1
-#         if count == topk:
-#             break
-
-#     count = 0.0
-#     for link in visual_links:
-#         if link in ills:
-#             count = count + 1
-#     logger.info(f"{(count / len(visual_links) * 100):.2f}% in true links")
-#     logger.info(f"visual links length: {(len(visual_links))}")
-#     train_ill = np.array(visual_links, dtype=np.int32)
-#     return train_ill
+    count = 0.0
+    for link in visual_links:
+        if link in ills:
+            count = count + 1
+    logger.info(f"{(count / len(visual_links) * 100):.2f}% in true links")
+    logger.info(f"visual links length: {(len(visual_links))}")
+    train_ill = np.array(visual_links, dtype=np.int32)
+    return train_ill
 
 
 def read_raw_data(file_dir, lang=[1, 2]):

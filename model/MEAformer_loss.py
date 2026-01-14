@@ -20,7 +20,15 @@ class CustomMultiLossLayer(nn.Module):
     def __init__(self, loss_num):
         super(CustomMultiLossLayer, self).__init__()
         self.loss_num = loss_num
-        self.log_vars = nn.Parameter(torch.zeros(self.loss_num, ), requires_grad=True)
+        #self.log_vars = nn.Parameter(torch.zeros(self.loss_num, ), requires_grad=True)
+        # 我们希望初始权重约为 100，所以 log_vars 初始化为 -4.6
+        # 假设最后一个 loss 是 Sinkhorn，前几个是普通的
+        init_values = torch.zeros(self.loss_num)
+        
+        # 假设 Sinkhorn 是列表里的最后一个
+        init_values[-1] = -4.6  # exp(-(-4.6)) ≈ 99.48
+        
+        self.log_vars = nn.Parameter(init_values, requires_grad=True)
 
     def forward(self, loss_list):
         assert len(loss_list) == self.loss_num
@@ -174,7 +182,6 @@ class icl_loss(nn.Module):
         logits_bb = torch.matmul(hidden2, torch.transpose(hidden2_large, 0, 1)) / temperature
         logits_bb = logits_bb - masks * LARGE_NUM
 
-        # === [修改处开始] ===
         # 必须在这里先初始化为 None，防止后面报错
         logits_ana = None
         logits_bnb = None

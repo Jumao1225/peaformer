@@ -132,15 +132,6 @@ class MultiModalEncoder(nn.Module):
         nn.init.normal_(self.entity_emb.weight, std=1.0 / math.sqrt(self.ENT_NUM))
         self.entity_emb.requires_grad = True
 
-        # # === [修改 1] 初始化关系注意力模块 ===
-        # # 假设 src/data.py 中 topR=1000，这里对应输入维度就是 1000
-        # # 如果你修改了 topR，这里也要对应修改
-        # REL_DIM = 1000 
-        # if self.args.w_rel:
-        #     self.rel_attn = RelationAttention(REL_DIM, reduction=8) # reduction越小参数越多，8是个不错的平衡
-        #     self.rel_fc = nn.Linear(REL_DIM, attr_dim)
-        # # ==================================
-
         # 线性层
         self.rel_fc = nn.Linear(1000, attr_dim)
         self.att_fc = nn.Linear(attr_input_dim, attr_dim)
@@ -187,48 +178,6 @@ class MultiModalEncoder(nn.Module):
                                          attn_dropout=args.attn_dropout,
                                          instance_normalization=self.args.instance_normalization, diag=True)
 
-        # 2. [关键修复] 超图编码器 (HypergraphConv)
-        # 专门处理 N x 3000 的矩阵
-        # if self.args.w_hypergraph:
-        #     self.hyper_graph_model = HypergraphConv(self.input_dim, attr_dim, dropout=self.args.hyper_dropout)
-
-        # # === [新增] 自适应门控层 ===
-        #     # 输入是 主图特征 + 超图特征 (拼接)
-        #     # 输出是 1 个权重值 (0~1)
-        #     # 这里的输入维度取决于你的 hidden_units 和 attr_dim
-        #     # 假设 input_dim 和 attr_dim 都是 hidden_units[0] 或者是对齐后的维度
-        #     # 通常 GCN/GAT 输出也是 attr_dim (如果对齐了的话) 或者 input_dim
-        #     # 咱们为了稳妥，用 input_dim + attr_dim
-            
-        #     # 检查一下维度:
-        #     # gph_emb 维度通常等于 self.n_units[-1] (GCN输出) 或 self.n_units[-1] * heads (GAT)
-        #     # 假设输出维度统一为 attr_dim (通常是 code 里的设计)
-            
-        #     # 我们直接用 2 * attr_dim -> 1
-        #     self.gate_fc = nn.Sequential(
-        #         nn.Linear(attr_dim * 2, attr_dim // 2),
-        #         nn.ReLU(),
-        #         nn.Linear(attr_dim // 2, 1),
-        #         nn.Sigmoid() # 保证输出在 0~1 之间
-        #     )
-        #     # =========================
-            # === [修改 1: 升级为通道级注意力 SE-Gate] ===
-            # 输入: [N, attr_dim * 2]
-            # 输出: [N, attr_dim] (不再是 1，而是和特征维度一样大)
-            # 让模型为每一个特征维度打分
-            # self.channel_gate = nn.Sequential(
-            #     nn.Linear(attr_dim * 2, attr_dim), # 降维融合
-            #     nn.ReLU(),
-            #     nn.Linear(attr_dim, attr_dim),     # 映射回特征维度
-            #     nn.Sigmoid()                       # 0~1 的权重向量
-            # )
-            
-            # === [新增: 层归一化] ===
-            # 在融合前对两个模态做 Norm，防止幅值差异过大导致某一方主导
-            # self.norm_gph = nn.LayerNorm(attr_dim)
-            # self.norm_hyper = nn.LayerNorm(attr_dim)
-            # ==========================================
-
         # 融合层
         self.fusion = MformerFusion(args, modal_num=self.args.inner_view_num, with_weight=self.args.with_weight)
 
@@ -248,40 +197,6 @@ class MultiModalEncoder(nn.Module):
             gph_emb = self.cross_graph_model(self.entity_emb(input_idx), adj)
         else:
             gph_emb = None
-
-        # 2. [关键修复] 超图特征计算
-        # 使用 HypergraphConv 处理 hyper_adj
-        # if self.args.w_hypergraph and hyper_adj is not None:
-        #     hyper_emb = self.hyper_graph_model(self.entity_emb(input_idx), hyper_adj)
-
-        #     # === 修改为使用 checkpoint ===
-        #     # 注意：checkpoint 要求输入必须设置 requires_grad=True 才能生效
-        #     # entity_emb 通常是可导的，所以直接包起来即可
-        #     def run_hyper(x, adj):
-        #          return self.hyper_graph_model(x, adj)
-                 
-        #     hyper_emb = checkpoint(run_hyper, self.entity_emb(input_idx), hyper_adj)
-        #     # ===========================
-
-        #     if gph_emb is not None:
-        #         # === [修改 2: 归一化 + 通道融合] ===
-        #         # 先做 LayerNorm，统一尺度
-        #         g_norm = self.norm_gph(gph_emb)
-        #         h_norm = self.norm_hyper(hyper_emb)
-                
-        #         # 拼接
-        #         cat_emb = torch.cat([g_norm, h_norm], dim=1)
-                
-        #         # 计算通道权重向量: [N, attr_dim]
-        #         # 例如: [0.1, 0.9, 0.05, ...] 表示第2维很重要，第1、3维是噪音
-        #         channel_weight = self.channel_gate(cat_emb)
-                
-        #         # 逐元素相乘 (Element-wise Product)
-        #         # 这比简单的标量乘法强大得多
-        #         # 残差连接
-        #         gph_emb = gph_emb + channel_weight * hyper_emb
-        #     else:
-        #         gph_emb = hyper_emb
 
         # === [新增: 编码拓扑特征] ===
         if topo_features is not None:
@@ -308,15 +223,6 @@ class MultiModalEncoder(nn.Module):
             rel_emb = self.rel_fc(rel_features)
         else:
             rel_emb = None
-        # # === [修改 2] 应用关系注意力 ===
-        # if self.args.w_rel:
-        #     # 1. 先通过 Attention 计算加权后的特征
-        #     weighted_rel_features = self.rel_attn(rel_features)
-        #     # 2. 再通过 FC 映射到隐藏空间
-        #     rel_emb = self.rel_fc(weighted_rel_features)
-        # else:
-        #     rel_emb = None
-        # ============================
         if self.args.w_attr:
             #att_emb = self.att_fc(att_features)
             # 1. 原始属性特征
@@ -446,25 +352,3 @@ class BertLayer(nn.Module):
         layer_output = self.output(intermediate_output, attention_output)
         return layer_output
         # return attention_output
-
-# class RelationAttention(nn.Module):
-#     """
-#     关系注意力模块 (SE-Block style)
-#     输入: [Batch, Rel_Dim] (例如 1000维的关系统计向量)
-#     输出: [Batch, Rel_Dim] (加权后的向量)
-#     作用: 动态学习每个关系的重要性，抑制常见但无用的关系(如 is_a)，放大稀有但关键的关系。
-#     """
-#     def __init__(self, in_dim, reduction=4):
-#         super(RelationAttention, self).__init__()
-#         self.gate = nn.Sequential(
-#             nn.Linear(in_dim, in_dim // reduction),
-#             nn.ReLU(),
-#             nn.Linear(in_dim // reduction, in_dim),
-#             nn.Sigmoid()
-#         )
-
-#     def forward(self, x):
-#         # x: [Batch, Rel_Dim]
-#         # weights: [Batch, Rel_Dim] (0~1 之间的权重)
-#         weights = self.gate(x)
-#         return x * weights
