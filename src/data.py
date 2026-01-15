@@ -144,17 +144,23 @@ def load_eva_data(logger, args):
     eval_ill = None
     input_idx = torch.LongTensor(np.arange(ENT_NUM))
 
+    # 统计全图节点的度数 (Calculate degrees BEFORE augmentation logic)
+    node_degrees = np.zeros(ENT_NUM, dtype=np.int32)
+    for h, r, t in triples:
+        node_degrees[h] += 1
+        node_degrees[t] += 1
+
     # === [新增: 动态图结构增强 (Visual Graph Augmentation)] ===
     # 利用视觉特征补全图结构：如果两个节点图片很像，我们认为它们之间有一条潜在的边
-    if args.w_img: # 只有在使用图片时才开启
+    if args.w_img and not args.no_visual_aug: # 只有在使用图片时才开启
         logger.info("Constructing Visual KNN Graph for Structure Augmentation...")
         
         # 1. 手动计算节点度数 (直接从 triples 统计，不依赖 adj)
         # 这样避免了 UnboundLocalError，且度数更准确
-        node_degrees = np.zeros(ENT_NUM, dtype=np.int32)
-        for h, r, t in triples:
-            node_degrees[h] += 1
-            node_degrees[t] += 1
+        # node_degrees = np.zeros(ENT_NUM, dtype=np.int32)
+        # for h, r, t in triples:
+        #     node_degrees[h] += 1
+        #     node_degrees[t] += 1
             
         # 2. 使用 KNN 寻找每个实体的视觉邻居
         # k=2 表示找最相似的 2 个邻居 (可以调整，不宜过大，否则引入噪声)
@@ -193,49 +199,77 @@ def load_eva_data(logger, args):
         
         # 将新边加入原始列表
         triples += new_triples
+
+    elif args.no_visual_aug:
+        logger.info("Visual Graph Augmentation is DISABLED (Ablation Study).")
     # ========================================================
     
     adj = get_adjr(ENT_NUM, triples, norm=True)
 
     # === [新增: 计算拓扑特征模态] ===
-    logger.info("Generating Graph Topology Features (Degree + PageRank)...")
-    
-    # 构建 NetworkX 图对象以便计算
-    G = nx.Graph()
-    G.add_nodes_from(range(ENT_NUM))
-    # triples: [(h, r, t), ...]
-    # 我们只关心连边，忽略关系类型
-    edges = [(t[0], t[2]) for t in triples]
-    G.add_edges_from(edges)
-    
-    # 1. 计算度 (Degree)
-    # 归一化：除以最大度，使其在 0~1 之间
-    degree_dict = dict(G.degree())
-    max_degree = max(degree_dict.values()) if len(degree_dict) > 0 else 1
-    degree_list = [degree_dict[i] / max_degree for i in range(ENT_NUM)]
-    
-    # 2. 计算 PageRank (全局重要性)
-    try:
-        pr_dict = nx.pagerank(G, alpha=0.85)
-        pr_list = [pr_dict[i] for i in range(ENT_NUM)]
-    except:
-        # 容错处理
-        pr_list = [0.0] * ENT_NUM
+    if not args.no_topo:
+        logger.info("Generating Graph Topology Features (Degree + PageRank)...")
         
-    # 3. 拼接成特征向量
-    # 维度 = 2 (Degree + PageRank)
-    # 你也可以加入 Clustering Coefficient 等，维度会增加
-    topo_features = np.column_stack((degree_list, pr_list))
-    
-    # 转为 Tensor [N, 2]
-    topo_features = torch.FloatTensor(topo_features)
-    
-    # 也可以做一个非线性映射，把 2 维映射到高维，或者留给模型做
-    logger.info(f"Topology Features Generated. Shape: {topo_features.shape}")
+        # 构建 NetworkX 图对象以便计算
+        G = nx.Graph()
+        G.add_nodes_from(range(ENT_NUM))
+        # triples: [(h, r, t), ...]
+        # 我们只关心连边，忽略关系类型
+        edges = [(t[0], t[2]) for t in triples]
+        G.add_edges_from(edges)
+        
+        # 1. 计算度 (Degree)
+        # 归一化：除以最大度，使其在 0~1 之间
+        degree_dict = dict(G.degree())
+        max_degree = max(degree_dict.values()) if len(degree_dict) > 0 else 1
+        degree_list = [degree_dict[i] / max_degree for i in range(ENT_NUM)]
+        
+        # 2. 计算 PageRank (全局重要性)
+        try:
+            pr_dict = nx.pagerank(G, alpha=0.85)
+            pr_list = [pr_dict[i] for i in range(ENT_NUM)]
+        except:
+            # 容错处理
+            pr_list = [0.0] * ENT_NUM
+            
+        # 3. 拼接成特征向量
+        # 维度 = 2 (Degree + PageRank)
+        # 你也可以加入 Clustering Coefficient 等，维度会增加
+        topo_features = np.column_stack((degree_list, pr_list))
+        
+        # 转为 Tensor [N, 2]
+        topo_features = torch.FloatTensor(topo_features)
+        
+        # 也可以做一个非线性映射，把 2 维映射到高维，或者留给模型做
+        logger.info(f"Topology Features Generated. Shape: {topo_features.shape}")
+
+    else:
+        logger.info("Topology Features are DISABLED (Ablation Study).")
+        topo_features = None  # 直接设为 None
     # ================================
 
     train_ill = EADataset(train_ill)
     test_ill = EADataset(test_ill)
+
+    # === [新增统计代码] 开始 ===
+    # 统计全图的度数分布
+    total_nodes = ENT_NUM
+    low_degree_nodes = np.sum(node_degrees <= 2)
+    logger.info(f"--- [Graph Stat] Total Nodes: {total_nodes}")
+    logger.info(f"--- [Graph Stat] Low-degree (<=2) Nodes: {low_degree_nodes} ({low_degree_nodes/total_nodes*100:.2f}%)")
+
+    # 关键：统计测试集(Test Set)中的低度数节点比例
+    # test_ill 是一个 [N_test, 2] 的数组，第0列是源实体，第1列是目标实体
+    test_src_entities = test_ill[:, 0] # 取出测试集左边的实体
+    
+    # 找出测试集中哪些实体的度数 <= 2
+    test_low_degree_mask = node_degrees[test_src_entities] <= 2
+    num_test_low = np.sum(test_low_degree_mask)
+    num_test_total = len(test_src_entities)
+    
+    logger.info(f"--- [Test Set Stat] Total Test Pairs: {num_test_total}")
+    logger.info(f"--- [Test Set Stat] Low-degree Test Pairs: {num_test_low} ({num_test_low/num_test_total*100:.2f}%)")
+    # === [新增统计代码] 结束 ===
 
     return {
         'ent_num': ENT_NUM,

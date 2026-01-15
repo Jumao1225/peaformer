@@ -525,8 +525,6 @@ class Runner:
             distance = 1 - csls_sim(1 - distance, self.args.csls_k)
 
         # 3. Sinkhorn 温度搜索 (Temperature Search)
-        # ==========================================
-        # 自动搜索最佳温度，不再使用固定的 0.05
         
         sim = -distance # 距离越小，相似度越大，所以取负
         
@@ -535,7 +533,7 @@ class Runner:
         final_distance = distance # 默认回退到原始距离
         
         # 搜索范围：从 0.02 (极自信) 到 0.07 (平滑)
-        temp_list = [0.02, 0.025, 0.03, 0.035, 0.04, 0.05, 0.07]
+        temp_list = [0.02, 0.03, 0.04, 0.05, 0.07, 0.08, 0.1]
         
         if self.rank == 0:
             self.logger.info(f"Searching best Sinkhorn temperature in {temp_list}...")
@@ -656,7 +654,6 @@ class Runner:
             self.early_stop_count -= 1
 
         # 6. 更新最佳模型逻辑
-        # 只有当 Sinkhorn 分数破纪录时，才保存模型
         if not self.args.only_test and mrr_l2r > max(self.loss_log.acc) and not last_epoch:
             self.logger.info(f"Best model update in Ep {self.epoch}: MRR from [{max(self.loss_log.acc)}] --> [{mrr_l2r}] ... ")
             self.loss_log.update_acc(mrr_l2r)

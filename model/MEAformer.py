@@ -65,7 +65,7 @@ class MEAformer(nn.Module):
         self.last_num = 1000000000000
         # self.idx_one = np.ones(self.args.batch_size, dtype=np.int64)
 
-        if "topo_features" in kgs:
+        if "topo_features" in kgs and kgs["topo_features"] is not None:
             self.topo_features = kgs["topo_features"].cuda()
         else:
             self.topo_features = None
