@@ -38,12 +38,9 @@ class CustomMultiLossLayer(nn.Module):
             loss += precision[i] * loss_list[i] + self.log_vars[i]
         return loss
 
-
 class icl_loss(nn.Module):
 
-    def __init__(self, tau=0.05, ab_weight=0.5, n_view=2, intra_weight=1.0, 
-                 inversion=False, replay=False, neg_cross_kg=False, 
-                hard_mining=True, hard_k=1024):
+    def __init__(self, tau=0.05, ab_weight=0.5, n_view=2, intra_weight=1.0, inversion=False, replay=False, neg_cross_kg=False):
         super(icl_loss, self).__init__()
         self.tau = tau
         self.sim = cosine_sim
@@ -53,10 +50,6 @@ class icl_loss(nn.Module):
         self.inversion = inversion
         self.replay = replay
         self.neg_cross_kg = neg_cross_kg
-
-        # [新增] 硬负样本挖掘配置
-        self.hard_mining = hard_mining
-        self.hard_k = hard_k
 
     def softXEnt(self, target, logits, replay=False, neg_cross_kg=False):
         # torch.Size([2239, 4478])
@@ -82,67 +75,6 @@ class icl_loss(nn.Module):
 
     # train_links[:, 0]: shape: (2239,)
     # array([11303,  2910,  2072, ..., 10504, 13555,  8416], dtype=int32)
-
-    def compute_hard_mining_loss(self, logits_aa, logits_bb, logits_ab, logits_ba, 
-                                 logits_ana, logits_bnb, batch_size, alpha):
-        """
-        专门用于计算 Hard Negative Mining 的 Loss
-        """
-        # 1. 提取正样本 (对角线元素) [Batch, 1]
-        pos_a = torch.diag(logits_ab).unsqueeze(1)
-        pos_b = torch.diag(logits_ba).unsqueeze(1)
-
-        # 2. 构建负样本候选集
-        # 掩码：用于屏蔽 logits_ab/ba 中的正样本（对角线）
-        diag_mask = torch.eye(batch_size, device=logits_ab.device).bool()
-        
-        # --- 处理 View A (Left) ---
-        # 负样本来源1: 跨模态 (AB) 的非对角线元素
-        neg_ab = logits_ab.clone()
-        neg_ab.masked_fill_(diag_mask, -1e9) # 将正样本位置设为极小值，使其不会被 TopK 选中
-        
-        # 负样本来源2: 同模态 (AA)
-        # 注意: logits_aa 在 forward 中已经对其对角线做了 -LARGE_NUM 处理，所以直接用
-        neg_aa = logits_aa 
-        
-        # 负样本来源3: Replay 策略的额外负样本 (如有)
-        neg_list_a = [neg_ab, neg_aa]
-        if logits_ana is not None:
-            neg_list_a.append(logits_ana)
-            
-        # 拼接所有负样本候选 [Batch, N_Neg]
-        all_negs_a = torch.cat(neg_list_a, dim=1)
-        
-        # 3. 核心步骤: 选取 Top-K 最难负样本
-        # 如果候选数量不足 K，则选取全部
-        k = min(self.hard_k, all_negs_a.size(1))
-        hard_negs_a, _ = torch.topk(all_negs_a, k=k, dim=1)
-        
-        # 4. 构建最终 Logits: [正样本, 硬负样本1, ..., 硬负样本K]
-        final_logits_a = torch.cat([pos_a, hard_negs_a], dim=1)
-        
-        # --- 处理 View B (Right) ---
-        neg_ba = logits_ba.clone()
-        neg_ba.masked_fill_(diag_mask, -1e9)
-        neg_bb = logits_bb
-        
-        neg_list_b = [neg_ba, neg_bb]
-        if logits_bnb is not None:
-            neg_list_b.append(logits_bnb)
-            
-        all_negs_b = torch.cat(neg_list_b, dim=1)
-        hard_negs_b, _ = torch.topk(all_negs_b, k=k, dim=1)
-        final_logits_b = torch.cat([pos_b, hard_negs_b], dim=1)
-        
-        # 5. 计算 Cross Entropy
-        # 标签全是 0 (因为正样本被我们拼接在了第0列)
-        labels = torch.zeros(batch_size, dtype=torch.long, device=logits_ab.device)
-        
-        loss_a = F.cross_entropy(final_logits_a, labels)
-        loss_b = F.cross_entropy(final_logits_b, labels)
-        
-        # 返回加权 Loss
-        return alpha * loss_a + (1 - alpha) * loss_b
 
     def forward(self, emb, train_links, neg_l=None, neg_r=None, norm=True):
         if norm:
@@ -182,11 +114,6 @@ class icl_loss(nn.Module):
         logits_bb = torch.matmul(hidden2, torch.transpose(hidden2_large, 0, 1)) / temperature
         logits_bb = logits_bb - masks * LARGE_NUM
 
-        # 必须在这里先初始化为 None，防止后面报错
-        logits_ana = None
-        logits_bnb = None
-        # ===================
-
         if neg_l is not None:
             zins = emb[neg_l]
             zjns = emb[neg_r]
@@ -195,13 +122,6 @@ class icl_loss(nn.Module):
 
         logits_ab = torch.matmul(hidden1, torch.transpose(hidden2_large, 0, 1)) / temperature
         logits_ba = torch.matmul(hidden2, torch.transpose(hidden1_large, 0, 1)) / temperature
-
-        # [新增] 硬负样本挖掘分支
-        if self.hard_mining:
-            return self.compute_hard_mining_loss(
-                logits_aa, logits_bb, logits_ab, logits_ba, 
-                logits_ana, logits_bnb, batch_size, alpha
-            )
 
         # logits_a = torch.cat([logits_ab, self.intra_weight*logits_aa], dim=1)
         # logits_b = torch.cat([logits_ba, self.intra_weight*logits_bb], dim=1)

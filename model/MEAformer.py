@@ -25,8 +25,8 @@ class MEAformer(nn.Module):
         self.input_idx = kgs["input_idx"].cuda()
         self.adj = kgs["adj"].cuda()
         
-        # 增加一个 Temperature 参数用于 InfoNCE
-        self.logit_scale = nn.Parameter(torch.ones([]) * np.log(1 / 0.05))
+        # # 增加一个 Temperature 参数用于 InfoNCE
+        # self.logit_scale = nn.Parameter(torch.ones([]) * np.log(1 / 0.05))
         
         self.rel_features = torch.Tensor(kgs["rel_features"]).cuda()
         self.att_features = torch.Tensor(kgs["att_features"]).cuda()
@@ -114,14 +114,6 @@ class MEAformer(nn.Module):
 
         in_loss = self.inner_view_loss(gph_emb, rel_emb, att_emb, img_emb, name_emb, char_emb, batch)
         out_loss = self.inner_view_loss(gph_emb_hid, rel_emb_hid, att_emb_hid, img_emb_hid, name_emb_hid, char_emb_hid, batch)        
-
-        # === [修改点: 跨模态 InfoNCE Loss] ===
-        # 计算 Graph 和 Image 之间的对比损失
-        # 目标: 同一实体的 Graph 和 Image 特征要尽量相似，不同实体的要尽量不相似
-        loss_cl_cross = self.compute_contrastive_loss(gph_emb, img_emb, batch)
-        
-        #loss_all = loss_joi + in_loss + out_loss + self.args.conflict_weight * loss_cl_cross
-
         # === [新增] 计算 Sinkhorn Training Loss ===
         # 1. 获取当前 Batch 对应的左右实体 Embedding
         if torch.is_tensor(batch):
@@ -134,16 +126,19 @@ class MEAformer(nn.Module):
         emb_right = joint_emb[batch_idx[:, 1]]
         
         # 2. 计算 Loss
-        loss_sinkhorn = self.sinkhorn_loss_fn(emb_left, emb_right)
-        # =========================================
-
-        #sinkhorn_weight = 1.0
-        weighted_sinkhorn_loss = self.sinkhorn_weight_layer([loss_sinkhorn])
+        if not self.args.no_sinkhorn:
+            loss_sinkhorn = self.sinkhorn_loss_fn(emb_left, emb_right)
+    
+            #sinkhorn_weight = 1.0
+            weighted_sinkhorn_loss = self.sinkhorn_weight_layer([loss_sinkhorn])
+        else:
+            loss_sinkhorn = torch.tensor(0.0).cuda()
+            sinkhorn_weight = 0.0
+            weighted_sinkhorn_loss = sinkhorn_weight * loss_sinkhorn
         
-        loss_all = loss_joi + in_loss + out_loss + \
-                   self.args.conflict_weight * loss_cl_cross + \
-                   weighted_sinkhorn_loss
-
+        loss_all = loss_joi + in_loss + out_loss + weighted_sinkhorn_loss
+                   #self.args.conflict_weight * loss_cl_cross + \
+                   
         #loss_dic = {"joint_Intra_modal": loss_joi.item(), "Intra_modal": in_loss.item()}
         loss_dic = {
             "joint_Intra_modal": loss_joi.item(), 
@@ -152,42 +147,6 @@ class MEAformer(nn.Module):
         }
         output = {"loss_dic": loss_dic, "emb": joint_emb}
         return loss_all, output
-
-    # === [新增: InfoNCE 实现] ===
-    def compute_contrastive_loss(self, feat1, feat2, batch):
-        """
-        Input: feat1 (All entities), feat2 (All entities), batch (Train pairs)
-        We only optimize for the entities in the current batch to save memory.
-        """
-        if feat1 is None or feat2 is None:
-            return torch.tensor(0.0).cuda()
-
-        # === [修复点] ===
-        # 检查 batch 是否为 tensor，如果不是（是 numpy），则转换
-        if not torch.is_tensor(batch):
-            batch = torch.tensor(batch, dtype=torch.int64).cuda()
-        # ===============
-            
-        # 1. 取出当前 Batch 的实体特征
-        # batch: [B, 2] (left_id, right_id)
-        # 我们把 left 和 right 都拿出来做对比
-        batch_indices = batch.flatten().unique()
-        
-        f1 = F.normalize(feat1[batch_indices], dim=1)
-        f2 = F.normalize(feat2[batch_indices], dim=1)
-        
-        # 2. 计算相似度矩阵
-        # [Batch_Unique, Batch_Unique]
-        logits = torch.matmul(f1, f2.t()) * self.logit_scale.exp()
-        
-        # 3. 标签是对象角线 (0,0), (1,1)... 因为是同一个实体的不同模态
-        labels = torch.arange(len(f1)).cuda()
-        
-        # 4. 双向 Cross Entropy
-        loss_i = F.cross_entropy(logits, labels)
-        loss_t = F.cross_entropy(logits.t(), labels)
-        
-        return (loss_i + loss_t) / 2    
 
     def generate_hidden_emb(self, hidden):
         gph_emb = F.normalize(hidden[:, 0, :].squeeze(1))

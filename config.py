@@ -109,14 +109,10 @@ class cfg():
         parser.add_argument("--replay", type=int, default=0, help="whether to use replay strategy")
         parser.add_argument("--neg_cross_kg", type=int, default=0, help="whether to force the negative samples in the opposite KG")
 
-        # # ========= [NEW] HyDRA-inspired Arguments =========
-        
-        parser.add_argument("--conflict_weight", type=float, default=0.5, help="Weight for the cross-modal conflict detection loss")
-        # # ==================================================
-
-        # === 新增消融实验控制参数 ===
-        parser.add_argument("--no_visual_aug", action="store_true", help="关闭视觉图结构增强 (w/o Visual Augmentation)")
-        parser.add_argument("--no_topo", action="store_true", help="关闭拓扑特征 (w/o Topo Features)")
+        # === 消融实验控制参数 ===
+        parser.add_argument("--no_visual_aug", action="store_true", help="w/o Visual Augmentation")
+        parser.add_argument("--no_topo", action="store_true", help="w/o Topo Features")
+        parser.add_argument("--no_sinkhorn", action="store_true", help="w/o Sinkhorn Loss")
 
         # --------- MSNEA -----------
         parser.add_argument("--dim", type=int, default=100, help="the hidden size of MSNEA")

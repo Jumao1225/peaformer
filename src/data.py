@@ -154,16 +154,8 @@ def load_eva_data(logger, args):
     # 利用视觉特征补全图结构：如果两个节点图片很像，我们认为它们之间有一条潜在的边
     if args.w_img and not args.no_visual_aug: # 只有在使用图片时才开启
         logger.info("Constructing Visual KNN Graph for Structure Augmentation...")
-        
-        # 1. 手动计算节点度数 (直接从 triples 统计，不依赖 adj)
-        # 这样避免了 UnboundLocalError，且度数更准确
-        # node_degrees = np.zeros(ENT_NUM, dtype=np.int32)
-        # for h, r, t in triples:
-        #     node_degrees[h] += 1
-        #     node_degrees[t] += 1
-            
+                    
         # 2. 使用 KNN 寻找每个实体的视觉邻居
-        # k=2 表示找最相似的 2 个邻居 (可以调整，不宜过大，否则引入噪声)
         k_neighbors = 1
         nbrs = NearestNeighbors(n_neighbors=k_neighbors + 1, 
                                 algorithm='brute', 
