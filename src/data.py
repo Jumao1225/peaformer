@@ -14,8 +14,9 @@ import torch.distributed
 from tqdm import tqdm
 
 from .utils import get_topk_indices, get_adjr
-from sentence_transformers import SentenceTransformer
+#from sentence_transformers import SentenceTransformer
 from sklearn.cluster import MiniBatchKMeans
+from src.utils import sinkhorn_process
 
 from sklearn.neighbors import NearestNeighbors
 import scipy.sparse as sp
@@ -43,8 +44,9 @@ class Collator_base(object):
 
 
 def load_data(logger, args):
-    assert args.data_choice in ["DWY", "DBP15K", "FBYG15K", "FBDB15K"]
-    if args.data_choice in ["DWY", "DBP15K", "FBYG15K", "FBDB15K"]:
+    # assert args.data_choice in ["DWY", "DBP15K", "FBYG15K", "FBDB15K"]
+    #if args.data_choice in ["DWY", "DBP15K", "FBYG15K", "FBDB15K"]:
+    if "OEA" in args.data_choice or args.data_choice in ["DWY", "DBP15K", "FBYG15K", "FBDB15K"]:
         KGs, non_train, train_ill, test_ill, eval_ill, test_ill_ = load_eva_data(logger, args)
 
     elif args.data_choice in ["FBYG15K_attr", "FBDB15K_attr"]:
@@ -54,7 +56,12 @@ def load_data(logger, args):
 
 
 def load_eva_data(logger, args):
-    file_dir = osp.join(args.data_path, args.data_choice, args.data_split)
+    if "OEA" in args.data_choice:
+        file_dir = osp.join(args.data_path, "OpenEA", args.data_choice)
+    else:
+        file_dir = osp.join(args.data_path, args.data_choice, args.data_split)
+        
+    # file_dir = osp.join(args.data_path, args.data_choice, args.data_split)
     lang_list = [1, 2]
     ent2id_dict, ills, triples, r_hs, r_ts, ids = read_raw_data(file_dir, lang_list)
     e1 = os.path.join(file_dir, 'ent_ids_1')
@@ -64,8 +71,34 @@ def load_eva_data(logger, args):
     ENT_NUM = len(ent2id_dict)
     REL_NUM = len(r_hs)
     np.random.shuffle(ills)
-    
-    if "V1" in file_dir:
+
+    img_vec_path = None
+
+    if "OEA" in args.data_choice:
+        # 设置 data_split 以便后续逻辑（如加载属性）使用
+        if "V1" in args.data_choice:
+            args.data_split = "norm"
+        elif "V2" in args.data_choice:
+            args.data_split = "dense"
+        
+        # # 处理 ratio (如果 args 中有 ratio 参数且不为 1.0)
+        # data_prefix = ""
+        # if hasattr(args, 'ratio') and str(args.ratio) != "1.0":
+        #     data_prefix = f"_{args.ratio}"
+            
+        # # OpenEA 的 pkl 路径结构通常在 OpenEA/pkl/ 下
+        # img_vec_path = osp.join(args.data_path, "OpenEA", "pkl", f"{args.data_choice}_id_img_feature_dict{data_prefix}.pkl")
+        # 1. 根据 ratio 参数决定文件名后缀
+        # 如果 ratio 是 1.0，读取标准文件；否则读取带后缀的文件 (如 _0.4.pkl)
+        if str(args.ratio) == "1.0":
+            suffix = ""
+        else:
+            suffix = f"_{args.ratio}"
+            
+        # 2. 拼接路径
+        img_vec_path = osp.join(args.data_path, "OpenEA", "pkl", f"{args.data_choice}_id_img_feature_dict{suffix}.pkl")
+        
+    elif "V1" in file_dir:
         split = "norm"
         img_vec_path = osp.join(args.data_path, "pkls/dbpedia_wikidata_15k_norm_GA_id_img_feature_dict.pkl")
     elif "V2" in file_dir:
@@ -78,9 +111,22 @@ def load_eva_data(logger, args):
         split = file_dir.split("/")[-1]
         img_vec_path = osp.join(args.data_path, "pkls", args.data_split + "_GA_id_img_feature_dict.pkl")
 
-    assert osp.exists(img_vec_path)
-    img_features = load_img(logger, ENT_NUM, img_vec_path)
-    logger.info(f"image feature shape:{img_features.shape}")
+    # assert osp.exists(img_vec_path)
+    # #img_features = load_img(logger, ENT_NUM, img_vec_path)
+    # img_features, valid_img_ids = load_img(logger, ENT_NUM, img_vec_path)
+    # logger.info(f"image feature shape:{img_features.shape}")
+    if img_vec_path and osp.exists(img_vec_path):
+        # #img_features = load_img(logger, ENT_NUM, img_vec_path)
+        # img_features, valid_img_ids = load_img(logger, ENT_NUM, img_vec_path)
+        # logger.info(f"image feature shape:{img_features.shape}")
+        img_features, valid_img_ids = load_img(logger, ENT_NUM, img_vec_path, ratio=args.ratio)
+        
+        logger.info(f"image feature shape:{img_features.shape}")
+    else:
+        # 如果找不到图像文件（防止报错，或者你可以选择抛出异常）
+        logger.warning(f"Image feature file not found at {img_vec_path}, initializing random.")
+        img_features = np.random.normal(size=(ENT_NUM, 100)) # 假设维度
+        valid_img_ids = set()
 
     if args.word_embedding == "glove":
         word2vec_path = os.path.join(args.data_path, "embedding", "glove.6B.300d.txt")
@@ -158,7 +204,7 @@ def load_eva_data(logger, args):
         # 2. 使用 KNN 寻找每个实体的视觉邻居
         k_neighbors = 1
         nbrs = NearestNeighbors(n_neighbors=k_neighbors + 1, 
-                                algorithm='brute', 
+                                algorithm='brute',
                                 metric='cosine', 
                                 n_jobs=-1).fit(img_features)
         distances, indices = nbrs.kneighbors(img_features)
@@ -189,8 +235,93 @@ def load_eva_data(logger, args):
         logger.info(f"Original edges: {len(triples)}")
         logger.info(f"Augmented edges: {len(new_triples)} (Targeting low-degree nodes only)")
         
-        # 将新边加入原始列表
-        triples += new_triples
+
+        # logger.info("Constructing Sinkhorn-Guided Visual Graph...")
+        
+        # # 1. 准备数据 (转为 Tensor 并移到 GPU 加速计算，因为 Sinkhorn 涉及矩阵运算)
+        # # 注意：如果有 3万节点，30000x30000 的 float32 矩阵约占 3.6GB 显存/内存，通常能放下。
+        # # 如果显存不够，可以放在 CPU 上跑 (device='cpu')
+        # device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        # img_feats_tensor = torch.tensor(img_features, dtype=torch.float32).to(device)
+        # img_feats_tensor = F.normalize(img_feats_tensor, dim=1) # 确保归一化
+
+        # # 2. 计算相似度矩阵 (Cosine Similarity)
+        # # Sim = X * X^T
+        # sim_matrix = torch.mm(img_feats_tensor, img_feats_tensor.t())
+        
+        # # 3. 执行 Sinkhorn 算法 (全局去噪)
+        # # 温度参数 temperature 越小，分布越尖锐（越接近 one-hot），去噪效果越强
+        # # 建议设为 0.05 或 0.1
+        # temperature = 0.05 
+        # logger.info(f"Running Sinkhorn process (temp={temperature})...")
+        
+        # # 调用 sinkhorn_process (假设输入需要是负距离，如果你用的是相似度，直接传 sim_matrix / temp 也可以，看具体实现)
+        # # 这里我们手动实现一个简单的 log-domain sinkhorn 以防万一
+        # def simple_sinkhorn(log_alpha, n_iters=20):
+        #     for _ in range(n_iters):
+        #         log_alpha = log_alpha - torch.logsumexp(log_alpha, dim=1, keepdim=True)
+        #         log_alpha = log_alpha - torch.logsumexp(log_alpha, dim=0, keepdim=True)
+        #     return torch.exp(log_alpha)
+
+        # # 输入：相似度 / 温度
+        # #P_matrix = simple_sinkhorn(sim_matrix / temperature, n_iters=20)
+        # with torch.no_grad():
+        #     sim = (sim_matrix / temperature).detach().cpu()   # 关键：cpu
+        #     P_matrix = simple_sinkhorn(sim, n_iters=20)
+        
+        # # 4. 稀疏化与构图 (Top-K)
+        # # 既然是 FBYG15K 这种异构且噪声大的，我们只取最最确信的 Top-1 或 Top-2
+        # top_k = 1
+        # visual_thresh = 0.01
+        
+        # vals, inds = torch.topk(P_matrix, k=top_k, dim=1)
+        
+        # # 转回 CPU 处理列表
+        # vals = vals.cpu().numpy()
+        # inds = inds.cpu().numpy()
+
+        # new_triples = []
+        # dummy_relation = 0
+        # added_count = 0
+        
+        # for i in range(ENT_NUM):
+        #     # === [关键修改 3] 过滤没有真实图片的节点 ===
+        #     # 如果 i 根本没有图片（是随机噪声），绝对不要给它加视觉边！
+        #     if i not in valid_img_ids:
+        #         continue
+                
+        #     # 策略：仍然建议只增强低度节点，或者全部增强但权重不同
+        #     # 这里保守起见，只增强度数小的节点
+        #     if node_degrees[i] > 2: 
+        #         continue
+            
+        #     for k in range(top_k):
+        #         neighbor_idx = inds[i][k]
+        #         prob = vals[i][k]
+
+        #         # 再次检查：邻居也要有真实图片
+        #         if neighbor_idx not in valid_img_ids:
+        #             continue
+                
+        #         # 双重保险：概率要够大，且不能是自己
+        #         if prob > visual_thresh and neighbor_idx != i:
+        #             # Sinkhorn 矩阵是对称优化的结果，单向添加即可，或者检查对称性
+        #             new_triples.append((i, dummy_relation, neighbor_idx))
+        #             new_triples.append((neighbor_idx, dummy_relation, i))
+        #             added_count += 1
+        
+        # # 5. 强制截断防 OOM (最后一道防线)
+        # if len(new_triples) > 100000:
+        #     import random
+        #     random.shuffle(new_triples)
+        #     new_triples = new_triples[:100000]
+            
+        # logger.info(f"Sinkhorn Augmented edges: {len(new_triples)}")
+        # triples += new_triples
+        
+        # # 清理显存
+        # del img_feats_tensor, sim_matrix, P_matrix
+        # torch.cuda.empty_cache()
 
     elif args.no_visual_aug:
         logger.info("Visual Graph Augmentation is DISABLED (Ablation Study).")
@@ -589,9 +720,9 @@ def load_json_embd(path):
     return embd_dict
 
 
-def load_img(logger, e_num, path):
+def load_img(logger, e_num, path, ratio=1.0):
     img_dict = pickle.load(open(path, "rb"))
-    # init unknown img vector with mean and std deviation of the known's
+    # init unknown img vector with mean and std deviation of the known's    
     imgs_np = np.array(list(img_dict.values()))
     mean = np.mean(imgs_np, axis=0)
     std = np.std(imgs_np, axis=0)
@@ -599,5 +730,6 @@ def load_img(logger, e_num, path):
     # img_embd = np.array([img_dict[i] if i in img_dict else np.zeros_like(img_dict[0]) for i in range(e_num)])
 
     img_embd = np.array([img_dict[i] if i in img_dict else np.random.normal(mean, std, mean.shape[0]) for i in range(e_num)])
+    valid_img_ids = set(img_dict.keys()) # 记录真实存在的图片ID
     logger.info(f"{(100 * len(img_dict) / e_num):.2f}% entities have images")
-    return img_embd
+    return img_embd, valid_img_ids

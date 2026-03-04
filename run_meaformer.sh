@@ -36,3 +36,9 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 python  main.py \
             --use_intermediate 1   \
             --enable_sota \
             --replay 0 \
+            #--no_sinkhorn
+            # --ratio         $6 \
+            # --add_noise     1  \
+            # --noise_ratio   $7 \
+            # --mask_ratio    $8 \
+            

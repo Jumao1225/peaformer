@@ -17,7 +17,24 @@ script -q -c "bash run_meaformer.sh 0 DBP15K fr_en 0.3 0" logs/run_DBP15Kfr_en03
 # DBP15K
 script -q -c "bash run_meaformer.sh 0 DBP15K zh_en 0.3 1" logs/run_DBP15Kzh_en031.log
 script -q -c "bash run_meaformer.sh 0 DBP15K ja_en 0.3 1" logs/run_DBP15Kja_en031.log
-script -q -c "bash run_meaformer.sh 0 DBP15K fr_en 0.3 1" logs/run_DBP15Kfr_en031.log
+script -q -c "bash run_meaformer.sh 0 DBP15K fr_en 0.3 1" logs/run_DBP15Kfr_en031.log  
+
+
+script -q -c "bash run_meaformer.sh 0 OEA_EN_FR_15K_V1 norm 0.2 0 1.0 0.8 0.2" logs/run_OEA_EN_FR_15K_v1.log
+script -q -c "bash run_meaformer.sh 0 OEA_EN_FR_15K_V1 norm 0.2 0 0.6 0.8 0.2" logs/run_OEA_EN_FR_15K_v1_06.log
+script -q -c "bash run_meaformer.sh 0 OEA_EN_FR_15K_V1 norm 0.2 0 0.4 0.8 0.2" logs/run_OEA_EN_FR_15K_v1_04.log
+
+script -q -c "bash run_meaformer.sh 0 OEA_EN_DE_15K_V1 norm 0.2 0 1.0 0.2 0.7" logs/run_OEA_EN_DE_15K_v1.log
+script -q -c "bash run_meaformer.sh 0 OEA_EN_DE_15K_V1 norm 0.2 0 0.6 0.2 0.7" logs/run_OEA_EN_DE_15K_v1_06.log
+script -q -c "bash run_meaformer.sh 0 OEA_EN_DE_15K_V1 norm 0.2 0 0.4 0.2 0.7" logs/run_OEA_EN_DE_15K_v1_04.log
+
+script -q -c "bash run_meaformer.sh 0 OEA_D_W_15K_V2 norm 0.2 0 1.0 0.2 0.7" logs/run_OEA_D_W_15K_v2.log
+script -q -c "bash run_meaformer.sh 0 OEA_D_W_15K_V2 norm 0.2 0 0.6 0.2 0.7" logs/run_OEA_D_W_15K_v2_06.log
+script -q -c "bash run_meaformer.sh 0 OEA_D_W_15K_V2 norm 0.2 0 0.4 0.2 0.7" logs/run_OEA_D_W_15K_v2_04.log
+
+script -q -c "bash run_meaformer.sh 0 OEA_D_W_15K_V1 norm 0.2 0 1.0 0.2 0.7" logs/run_OEA_D_W_15K_v1.log
+script -q -c "bash run_meaformer.sh 0 OEA_D_W_15K_V1 norm 0.2 0 0.6 0.2 0.7" logs/run_OEA_D_W_15K_v1_06.log
+script -q -c "bash run_meaformer.sh 0 OEA_D_W_15K_V1 norm 0.2 0 0.4 0.2 0.7" logs/run_OEA_D_W_15K_v1_04.log
 
 
 # # w/o surface

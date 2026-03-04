@@ -29,8 +29,8 @@ class cfg():
         parser.add_argument("--random_seed", default=42, type=int)
         parser.add_argument("--data_path", default="mmkg", type=str, help="Experiment path")
 
-        # --------- EA -----------
-        parser.add_argument("--data_choice", default="DBP15K", type=str, choices=["DBP15K", "DWY", "FBYG15K", "FBDB15K"], help="Experiment path")
+        # --------- EA -----------  
+        parser.add_argument("--data_choice", default="DBP15K", type=str, choices=["DBP15K", "DWY", "FBYG15K", "FBDB15K", "OEA_EN_FR_15K_V1", "OEA_EN_FR_15K_V2", "OEA_D_W_15K_V2", "OEA_EN_DE_15K_V1", "OEA_EN_DE_15K_V2", "OEA_D_W_15K_V1", "OEA_EN_FR_100K_V2", "OEA_EN_FR_100K_V1", "OEA_D_W_100K_V2", "OEA_D_W_100K_V1"], help="Experiment path")
         parser.add_argument("--data_rate", type=float, default=0.3, help="training set rate")
         # parser.add_argument("--data_rate", type=float, default=0.3, choices=[0.2, 0.3, 0.5, 0.8], help="training set rate")
 
@@ -113,6 +113,14 @@ class cfg():
         parser.add_argument("--no_visual_aug", action="store_true", help="w/o Visual Augmentation")
         parser.add_argument("--no_topo", action="store_true", help="w/o Topo Features")
         parser.add_argument("--no_sinkhorn", action="store_true", help="w/o Sinkhorn Loss")
+
+        # === [新增] 噪声与鲁棒性控制参数 (Noise & Ratio Control) ===
+        parser.add_argument('--add_noise', type=int, default=0, choices=[0, 1], help="Enable dynamic noise injection (augmentation) during training")
+        parser.add_argument('--noise_ratio', type=float, default=0.1, help="Probability of injecting noise into an entity's features")
+        parser.add_argument('--mask_ratio', type=float, default=0.1, help="Intensity of noise (1.0 means replace with pure noise)")
+        parser.add_argument("--ratio", type=str, default="1.0", 
+                            choices=["0.05", "0.1", "0.15", "0.2", "0.3", "0.4", "0.45", "0.5", "0.55", "0.6", "0.7", "0.75", "0.8", "0.9", "0.95","1.0"],
+                            help="Static Image Retention Ratio (Data Level)")
 
         # --------- MSNEA -----------
         parser.add_argument("--dim", type=int, default=100, help="the hidden size of MSNEA")

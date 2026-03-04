@@ -168,7 +168,6 @@ class MultiModalEncoder(nn.Module):
             nn.ReLU(),
             nn.Linear(self.topo_dim, self.topo_dim)
         )
-        # ===========================
 
         # 1. 主图编码器 (GCN/GAT)
         if self.args.structure_encoder == "gcn":

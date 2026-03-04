@@ -73,6 +73,15 @@ class MEAformer(nn.Module):
         # 初始化 Sinkhorn Loss
         self.sinkhorn_loss_fn = SinkhornLoss(tau=0.05, n_iter=10)
 
+        # === [新增] 初始化噪声相关的统计量 ===
+        if self.args.add_noise:
+            self.get_mean_std()
+            self.update_noise() # 初始化第一轮噪声
+        else:
+            # 如果不加噪声，直接指向原特征，防止调用报错
+            self.img_noisy_features = self.img_features
+            self.rel_noisy_features = self.rel_features
+
     def forward(self, batch):
         gph_emb, img_emb, rel_emb, att_emb, name_emb, char_emb, joint_emb, hidden_states = self.joint_emb_generat(only_joint=False)
         gph_emb_hid, rel_emb_hid, att_emb_hid, img_emb_hid, name_emb_hid, char_emb_hid, joint_emb_hid = self.generate_hidden_emb(hidden_states)
@@ -179,6 +188,16 @@ class MEAformer(nn.Module):
     # --------- necessary ---------------
 
     def joint_emb_generat(self, only_joint=True):
+
+        # === [修改] 动态选择是否使用噪声特征 ===
+        # 只有在 (开启add_noise) AND (处于训练模式) 时才使用 noisy features
+        if self.args.add_noise and self.training:
+            curr_img_feats = self.img_noisy_features
+            curr_rel_feats = self.rel_noisy_features
+        else:
+            curr_img_feats = self.img_features
+            curr_rel_feats = self.rel_features
+        # ======================================
         
         ret_tuple = self.multimodal_encoder(
             self.input_idx, 
@@ -249,3 +268,46 @@ class MEAformer(nn.Module):
             logger.info("len(new_links) is 0")
 
         return left_non_train, right_non_train, train_ill, new_links
+
+    # === [新增] 噪声处理相关函数 ===
+    
+    def get_mean_std(self):
+        """计算特征的均值和方差，用于生成高斯噪声"""
+        self.img_mean = torch.mean(self.img_features, dim=0)
+        self.img_std = torch.std(self.img_features, dim=0)
+        self.rel_mean = torch.mean(self.rel_features, dim=0)
+        self.rel_std = torch.std(self.rel_features, dim=0)
+
+    def add_noise_to_embeddings(self, embeddings, mean, std):
+        """
+        核心逻辑：
+        1. noise_ratio: 决定有多少比例的实体会被选中加噪声
+        2. mask_ratio: 决定噪声替换原始特征的强度 (1.0 = 完全替换)
+        """
+        if not self.training:
+            return embeddings
+            
+        # 1. 生成掩码：选中 noise_ratio 比例的实体
+        # rand 生成 [0, 1] 之间的数，小于 noise_ratio 的位置为 True
+        noise_mask = torch.rand(embeddings.shape[0], device=embeddings.device) < self.args.noise_ratio
+        
+        # 2. 生成与 embeddings 同形状的高斯噪声
+        # expand_as 确保形状一致
+        noise = torch.normal(mean=mean.expand_as(embeddings), std=std.expand_as(embeddings)).to(embeddings.device)
+        
+        # 3. 混合：Original * (1 - mask_ratio) + Noise * mask_ratio
+        # 只有被 mask 选中的位置才会被修改
+        out = embeddings.clone()
+        alpha = self.args.mask_ratio
+        out[noise_mask] = (1 - alpha) * embeddings[noise_mask] + alpha * noise[noise_mask]
+        
+        return out
+
+    def update_noise(self):
+        """
+        在每个 Epoch 开始前调用 (通常由 main.py 调用)，刷新噪声分布
+        """
+        if self.args.add_noise:
+            self.img_noisy_features = self.add_noise_to_embeddings(self.img_features, self.img_mean, self.img_std)
+            self.rel_noisy_features = self.add_noise_to_embeddings(self.rel_features, self.rel_mean, self.rel_std)
+    # ==============================

@@ -416,6 +416,25 @@ class Runner:
             temp_str = "Disabled"
 
         # ==========================================
+        # 保存真实的距离矩阵用于画 k-occurrence 直方图
+        if last_epoch:
+            save_dir = osp.join(self.args.data_path, self.args.model_name, "matrix_output")
+            os.makedirs(save_dir, exist_ok=True)
+            
+            # 根据是否启用了 Sinkhorn 自动区分文件名
+            if not self.args.no_sinkhorn:
+                matrix_name = "sim_matrix_ours.npy"
+            else:
+                matrix_name = "sim_matrix_base.npy"
+                
+            matrix_path = osp.join(save_dir, matrix_name)
+            
+            # 将 Tensor 转为 numpy 数组并保存
+            np.save(matrix_path, final_distance.detach().cpu().numpy())
+            
+            if self.rank == 0:
+                self.logger.info(f"[*] 成功保存测试集距离矩阵用于画图: {matrix_path}")
+        # ==========================================
 
         # 4. 计算最终详细指标 (使用搜索到的最佳 final_distance)
         top_k = [1, 10, 50]

@@ -25,8 +25,11 @@ class CustomMultiLossLayer(nn.Module):
         # 假设最后一个 loss 是 Sinkhorn，前几个是普通的
         init_values = torch.zeros(self.loss_num)
         
-        # 假设 Sinkhorn 是列表里的最后一个
-        init_values[-1] = -4.6  # exp(-(-4.6)) ≈ 99.48
+        # init_values[-1] = -4.6  # exp(-(-4.6)) ≈ 99.48
+        if self.loss_num == 1: # 专门针对 Sinkhorn 那一层
+             init_values[-1] = 0.0 # 从 1.0 倍开始
+        else:
+             init_values[-1] = 0.0
         
         self.log_vars = nn.Parameter(init_values, requires_grad=True)
 
