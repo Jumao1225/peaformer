@@ -196,132 +196,158 @@ def load_eva_data(logger, args):
         node_degrees[h] += 1
         node_degrees[t] += 1
 
+    node_degrees1 = {}
+    for h, r, t in triples:
+        node_degrees1[h] = node_degrees1.get(h, 0) + 1
+        node_degrees1[t] = node_degrees1.get(t, 0) + 1
+
+    # 假设原代码中您已经统计了节点的度数，存在 node_degrees 中
+    # node_degrees 可能是一个字典 {node_id: degree} 或者列表/数组
+    if isinstance(node_degrees, dict):
+        degree_list = list(node_degrees.values())
+    else:
+        degree_list = node_degrees    
+    # 计算全图度数排名的后 20% 对应的度数阈值
+    # np.percentile 会自动对数据排序并找到 20% 处的数值
+    dynamic_thresh = np.percentile(degree_list, 20)
+    print(f"[Graph Stat] Automatically adapted degree threshold (bottom 20%): <= {dynamic_thresh}")
+
     # === [新增: 动态图结构增强 (Visual Graph Augmentation)] ===
     # 利用视觉特征补全图结构：如果两个节点图片很像，我们认为它们之间有一条潜在的边
     if args.w_img and not args.no_visual_aug: # 只有在使用图片时才开启
-        logger.info("Constructing Visual KNN Graph for Structure Augmentation...")
+        # logger.info("Constructing Visual KNN Graph for Structure Augmentation...")
                     
-        # 2. 使用 KNN 寻找每个实体的视觉邻居
-        k_neighbors = 1
-        nbrs = NearestNeighbors(n_neighbors=k_neighbors + 1, 
-                                algorithm='brute',
-                                metric='cosine', 
-                                n_jobs=-1).fit(img_features)
-        distances, indices = nbrs.kneighbors(img_features)
+        # # 2. 使用 KNN 寻找每个实体的视觉邻居
+        # k_neighbors = 1
+        # nbrs = NearestNeighbors(n_neighbors=k_neighbors + 1, 
+        #                         algorithm='brute',
+        #                         metric='cosine', 
+        #                         n_jobs=-1).fit(img_features)
+        # distances, indices = nbrs.kneighbors(img_features)
         
-        # 3. 筛选并添加边
-        # 只有度数 <= 2 的“孤僻节点”才允许加边
-        degree_threshold = 2
-        new_triples = []
-        dummy_relation = 0 # 虚拟关系ID
-        added_count = 0
-        
-        for i in range(ENT_NUM):
-            # 如果度数已经够大了，就不需要视觉增强了
-            if node_degrees[i] > degree_threshold:
-                continue
-                
-            for j in range(1, k_neighbors + 1):
-                neighbor_idx = indices[i][j]
-                dist = distances[i][j]
-                
-                # 双重保险：不仅要是低度节点，视觉距离还要足够近
-                # dist < 0.6 是一个经验阈值，确保非常相似
-                if dist < 0.6:
-                    new_triples.append((i, dummy_relation, neighbor_idx))
-                    new_triples.append((neighbor_idx, dummy_relation, i))
-                    added_count += 1
-                    
-        logger.info(f"Original edges: {len(triples)}")
-        logger.info(f"Augmented edges: {len(new_triples)} (Targeting low-degree nodes only)")
-        
-
-        # logger.info("Constructing Sinkhorn-Guided Visual Graph...")
-        
-        # # 1. 准备数据 (转为 Tensor 并移到 GPU 加速计算，因为 Sinkhorn 涉及矩阵运算)
-        # # 注意：如果有 3万节点，30000x30000 的 float32 矩阵约占 3.6GB 显存/内存，通常能放下。
-        # # 如果显存不够，可以放在 CPU 上跑 (device='cpu')
-        # device = 'cuda' if torch.cuda.is_available() else 'cpu'
-        # img_feats_tensor = torch.tensor(img_features, dtype=torch.float32).to(device)
-        # img_feats_tensor = F.normalize(img_feats_tensor, dim=1) # 确保归一化
-
-        # # 2. 计算相似度矩阵 (Cosine Similarity)
-        # # Sim = X * X^T
-        # sim_matrix = torch.mm(img_feats_tensor, img_feats_tensor.t())
-        
-        # # 3. 执行 Sinkhorn 算法 (全局去噪)
-        # # 温度参数 temperature 越小，分布越尖锐（越接近 one-hot），去噪效果越强
-        # # 建议设为 0.05 或 0.1
-        # temperature = 0.05 
-        # logger.info(f"Running Sinkhorn process (temp={temperature})...")
-        
-        # # 调用 sinkhorn_process (假设输入需要是负距离，如果你用的是相似度，直接传 sim_matrix / temp 也可以，看具体实现)
-        # # 这里我们手动实现一个简单的 log-domain sinkhorn 以防万一
-        # def simple_sinkhorn(log_alpha, n_iters=20):
-        #     for _ in range(n_iters):
-        #         log_alpha = log_alpha - torch.logsumexp(log_alpha, dim=1, keepdim=True)
-        #         log_alpha = log_alpha - torch.logsumexp(log_alpha, dim=0, keepdim=True)
-        #     return torch.exp(log_alpha)
-
-        # # 输入：相似度 / 温度
-        # #P_matrix = simple_sinkhorn(sim_matrix / temperature, n_iters=20)
-        # with torch.no_grad():
-        #     sim = (sim_matrix / temperature).detach().cpu()   # 关键：cpu
-        #     P_matrix = simple_sinkhorn(sim, n_iters=20)
-        
-        # # 4. 稀疏化与构图 (Top-K)
-        # # 既然是 FBYG15K 这种异构且噪声大的，我们只取最最确信的 Top-1 或 Top-2
-        # top_k = 1
-        # visual_thresh = 0.01
-        
-        # vals, inds = torch.topk(P_matrix, k=top_k, dim=1)
-        
-        # # 转回 CPU 处理列表
-        # vals = vals.cpu().numpy()
-        # inds = inds.cpu().numpy()
-
+        # # 3. 筛选并添加边
+        # # 只有度数 <= 2 的“孤僻节点”才允许加边
+        # degree_threshold = 2
         # new_triples = []
-        # dummy_relation = 0
+        # dummy_relation = 0 # 虚拟关系ID
         # added_count = 0
         
         # for i in range(ENT_NUM):
-        #     # === [关键修改 3] 过滤没有真实图片的节点 ===
-        #     # 如果 i 根本没有图片（是随机噪声），绝对不要给它加视觉边！
-        #     if i not in valid_img_ids:
+        #     # 如果度数已经够大了，就不需要视觉增强了
+        #     if node_degrees[i] > degree_threshold:
         #         continue
                 
-        #     # 策略：仍然建议只增强低度节点，或者全部增强但权重不同
-        #     # 这里保守起见，只增强度数小的节点
-        #     if node_degrees[i] > 2: 
-        #         continue
-            
-        #     for k in range(top_k):
-        #         neighbor_idx = inds[i][k]
-        #         prob = vals[i][k]
-
-        #         # 再次检查：邻居也要有真实图片
-        #         if neighbor_idx not in valid_img_ids:
-        #             continue
+        #     for j in range(1, k_neighbors + 1):
+        #         neighbor_idx = indices[i][j]
+        #         dist = distances[i][j]
                 
-        #         # 双重保险：概率要够大，且不能是自己
-        #         if prob > visual_thresh and neighbor_idx != i:
-        #             # Sinkhorn 矩阵是对称优化的结果，单向添加即可，或者检查对称性
+        #         # 双重保险：不仅要是低度节点，视觉距离还要足够近
+        #         # dist < 0.6 是一个经验阈值，确保非常相似
+        #         if dist < 0.6:
         #             new_triples.append((i, dummy_relation, neighbor_idx))
         #             new_triples.append((neighbor_idx, dummy_relation, i))
         #             added_count += 1
+                    
+        # logger.info(f"Original edges: {len(triples)}")
+        # logger.info(f"Augmented edges: {len(new_triples)} (Targeting low-degree nodes only)")
+
+        # triples.extend(new_triples)
         
-        # # 5. 强制截断防 OOM (最后一道防线)
-        # if len(new_triples) > 100000:
-        #     import random
-        #     random.shuffle(new_triples)
-        #     new_triples = new_triples[:100000]
+
+        logger.info("Constructing Sinkhorn-Guided Visual Graph...")
+        
+        # 1. 准备数据 (转为 Tensor 并移到 GPU 加速计算，因为 Sinkhorn 涉及矩阵运算)
+        # 注意：如果有 3万节点，30000x30000 的 float32 矩阵约占 3.6GB 显存/内存，通常能放下。
+        # 如果显存不够，可以放在 CPU 上跑 (device='cpu')
+        device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        img_feats_tensor = torch.tensor(img_features, dtype=torch.float32).to(device)
+        img_feats_tensor = F.normalize(img_feats_tensor, dim=1) # 确保归一化
+
+        # 2. 计算相似度矩阵 (Cosine Similarity)
+        # Sim = X * X^T
+        sim_matrix = torch.mm(img_feats_tensor, img_feats_tensor.t())
+        
+        # 3. 执行 Sinkhorn 算法 (全局去噪)
+        # 温度参数 temperature 越小，分布越尖锐（越接近 one-hot），去噪效果越强
+        # 建议设为 0.05 或 0.1
+        temperature = 0.05 
+        logger.info(f"Running Sinkhorn process (temp={temperature})...")
+        
+        # 调用 sinkhorn_process (假设输入需要是负距离，如果你用的是相似度，直接传 sim_matrix / temp 也可以，看具体实现)
+        # 这里我们手动实现一个简单的 log-domain sinkhorn 以防万一
+        def simple_sinkhorn(log_alpha, n_iters=20):
+            for _ in range(n_iters):
+                log_alpha = log_alpha - torch.logsumexp(log_alpha, dim=1, keepdim=True)
+                log_alpha = log_alpha - torch.logsumexp(log_alpha, dim=0, keepdim=True)
+            return torch.exp(log_alpha)
+
+        # 输入：相似度 / 温度
+        #P_matrix = simple_sinkhorn(sim_matrix / temperature, n_iters=20)
+        with torch.no_grad():
+            sim = (sim_matrix / temperature).detach().cpu()   # 关键：cpu
+            P_matrix = simple_sinkhorn(sim, n_iters=20)
+        
+        # 4. 稀疏化与构图 (Top-K)
+        # 既然是 FBYG15K 这种异构且噪声大的，我们只取最最确信的 Top-1 或 Top-2
+        top_k = 1
+        visual_thresh = 0.01
+        
+        vals, inds = torch.topk(P_matrix, k=top_k, dim=1)
+
+        # === [新增：自适应动态度数阈值计算] ===
+        # 计算全图节点度数排名的后 20%
+        raw_thresh = np.percentile(node_degrees, 20)
+        # 强制限制：最少为 2，最多为 15
+        dynamic_thresh = max(2, min(int(raw_thresh), 15))
+        logger.info(f"Automatically adapted degree threshold (bottom 20%): <= {dynamic_thresh}")
+        # ======================================
+        
+        # 转回 CPU 处理列表
+        vals = vals.cpu().numpy()
+        inds = inds.cpu().numpy()
+
+        new_triples = []
+        dummy_relation = 0
+        added_count = 0
+        
+        for i in range(ENT_NUM):
+            # === [关键修改 3] 过滤没有真实图片的节点 ===
+            # 如果 i 根本没有图片（是随机噪声），绝对不要给它加视觉边！
+            if i not in valid_img_ids:
+                continue
+                
+            # 策略：仍然建议只增强低度节点，或者全部增强但权重不同
+            # 这里保守起见，只增强度数小的节点
+            if node_degrees[i] > dynamic_thresh: 
+                continue
             
-        # logger.info(f"Sinkhorn Augmented edges: {len(new_triples)}")
-        # triples += new_triples
+            for k in range(top_k):
+                neighbor_idx = inds[i][k]
+                prob = vals[i][k]
+
+                # 再次检查：邻居也要有真实图片
+                if neighbor_idx not in valid_img_ids:
+                    continue
+                
+                # 双重保险：概率要够大，且不能是自己
+                if prob > visual_thresh and neighbor_idx != i:
+                    # Sinkhorn 矩阵是对称优化的结果，单向添加即可，或者检查对称性
+                    new_triples.append((i, dummy_relation, neighbor_idx))
+                    new_triples.append((neighbor_idx, dummy_relation, i))
+                    added_count += 1
         
-        # # 清理显存
-        # del img_feats_tensor, sim_matrix, P_matrix
-        # torch.cuda.empty_cache()
+        # 5. 强制截断防 OOM (最后一道防线)
+        if len(new_triples) > 100000:
+            import random
+            random.shuffle(new_triples)
+            new_triples = new_triples[:100000]
+            
+        logger.info(f"Sinkhorn Augmented edges: {len(new_triples)}")
+        triples += new_triples
+        
+        # 清理显存
+        del img_feats_tensor, sim_matrix, P_matrix
+        torch.cuda.empty_cache()
 
     elif args.no_visual_aug:
         logger.info("Visual Graph Augmentation is DISABLED (Ablation Study).")
