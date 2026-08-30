@@ -14,7 +14,7 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 python  main.py \
 	        --csls          \
 	        --csls_k        3 \
 	        --random_seed   42 \
-            --exp_name      IJCAI_MEAformer_sf_$5_500-Norm \
+            --exp_name      IJCAI_MMTA_sf_$5_500-Norm \
             --exp_id        v1_$3_$4 \
             --workers       12 \
             --dist          0 \
@@ -36,8 +36,12 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 python  main.py \
             --use_intermediate 1   \
             --enable_sota \
             --replay 0 \
-            --ratio         $6 \
-            --add_noise     1  \
-            --noise_ratio   $7 \
-            --mask_ratio    $8 \
+            # --no_visual_aug \
+            # --no_sinkhorn \
+            # --no_topo
+            # --sinkhorn_temp 0.05
+            # --ratio         $6 \
+            # --add_noise     1  \
+            # --noise_ratio   $7 \
+            # --mask_ratio    $8 \
             

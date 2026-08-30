@@ -35,7 +35,7 @@ class cfg():
         # parser.add_argument("--data_rate", type=float, default=0.3, choices=[0.2, 0.3, 0.5, 0.8], help="training set rate")
 
         # TODO: add some dynamic variable
-        parser.add_argument("--model_name", default="MEAformer", type=str, choices=["EVA", "MCLEA", "MSNEA", "MEAformer"], help="model name")
+        parser.add_argument("--model_name", default="MEAformer", type=str, choices=["EVA", "MCLEA", "MSNEA", "MEAformer", "MMTA"], help="model name")
         parser.add_argument("--model_name_save", default="", type=str, help="model name for model load")
 
         parser.add_argument('--workers', type=int, default=8)
@@ -113,6 +113,8 @@ class cfg():
         parser.add_argument("--no_visual_aug", action="store_true", help="w/o Visual Augmentation")
         parser.add_argument("--no_topo", action="store_true", help="w/o Topo Features")
         parser.add_argument("--no_sinkhorn", action="store_true", help="w/o Sinkhorn Loss")
+
+        parser.add_argument('--sinkhorn_temp', type=float, default=0.05, help="Temperature for Sinkhorn process in data aug, loss, and test.")
 
         # === [新增] 噪声与鲁棒性控制参数 (Noise & Ratio Control) ===
         parser.add_argument('--add_noise', type=int, default=0, choices=[0, 1], help="Enable dynamic noise injection (augmentation) during training")

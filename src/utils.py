@@ -477,3 +477,63 @@ def sinkhorn_process(similarity_matrix, temp=0.05, max_iter=20):
         
     # 4. 转回概率空间
     return torch.exp(Q)
+
+
+# 在 src/utils.py 中添加
+import numpy as np
+import torch
+from sklearn.metrics.pairwise import pairwise_distances
+
+def degree_wise_get_hits(Lvec, Rvec, node_degrees_L, top_k=(1, 5, 10)):
+    """
+    根据实体的图节点度数(Degree)将其分组，并分别计算每一组的 Hits@1。
+    node_degrees_L: 左侧知识图谱（通常是 Source KG）中每个测试实体的度数列表。
+    """
+    # 1. 计算相似度矩阵
+    sim = pairwise_distances(torch.FloatTensor(Lvec), torch.FloatTensor(Rvec)).numpy()
+    
+    # 2. 定义度数区间 (例如：极度稀疏、中等、丰富)
+    groups = {
+        "Degree 1-2": [],
+        "Degree 3-5": [],
+        "Degree >5": []
+    }
+    
+    # 3. 将测试实体的索引按度数分发到不同组
+    for idx, degree in enumerate(node_degrees_L):
+        if degree <= 2:
+            groups["Degree 1-2"].append(idx)
+        elif degree <= 5:
+            groups["Degree 3-5"].append(idx)
+        else:
+            groups["Degree >5"].append(idx)
+            
+    # 4. 针对每一组分别计算 Hits@k
+    group_results = {}
+    for group_name, indices in groups.items():
+        if len(indices) == 0:
+            continue
+            
+        group_sim = sim[indices, :] # 只取该组实体的相似度行
+        s_len = len(indices)
+        top_total = np.array([0] * len(top_k))
+        
+        for i in range(s_len):
+            # 对每一行的相似度进行排序（从小到大，因为是 distance）
+            rank = group_sim[i, :].argsort()
+            # 真实对应的 target 索引就是 indices[i] (假设 Lvec 和 Rvec 是严格对齐的测试集)
+            target_idx = indices[i] 
+            rank_index = np.where(rank == target_idx)[0][0]
+            
+            for j in range(len(top_k)):
+                if rank_index < top_k[j]:
+                    top_total[j] += 1
+                    
+        acc_total = top_total / s_len
+        group_results[group_name] = {
+            "count": s_len,
+            "hits@1": round(acc_total[0], 4),
+            "hits@10": round(acc_total[2], 4) if len(top_k) > 2 else 0
+        }
+        
+    return group_results

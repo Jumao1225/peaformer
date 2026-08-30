@@ -209,8 +209,9 @@ def load_eva_data(logger, args):
         degree_list = node_degrees    
     # 计算全图度数排名的后 20% 对应的度数阈值
     # np.percentile 会自动对数据排序并找到 20% 处的数值
-    dynamic_thresh = np.percentile(degree_list, 20)
-    print(f"[Graph Stat] Automatically adapted degree threshold (bottom 20%): <= {dynamic_thresh}")
+    # dynamic_thresh = np.percentile(degree_list, 20)
+    # dynamic_thresh = 2
+    # print(f"[Graph Stat] Automatically adapted degree threshold (bottom 20%): <= {dynamic_thresh}")
 
     # === [新增: 动态图结构增强 (Visual Graph Augmentation)] ===
     # 利用视觉特征补全图结构：如果两个节点图片很像，我们认为它们之间有一条潜在的边
@@ -270,7 +271,8 @@ def load_eva_data(logger, args):
         # 3. 执行 Sinkhorn 算法 (全局去噪)
         # 温度参数 temperature 越小，分布越尖锐（越接近 one-hot），去噪效果越强
         # 建议设为 0.05 或 0.1
-        temperature = 0.05 
+        # temperature = 0.05
+        temperature = args.sinkhorn_temp
         logger.info(f"Running Sinkhorn process (temp={temperature})...")
         
         # 调用 sinkhorn_process (假设输入需要是负距离，如果你用的是相似度，直接传 sim_matrix / temp 也可以，看具体实现)
@@ -289,16 +291,17 @@ def load_eva_data(logger, args):
         
         # 4. 稀疏化与构图 (Top-K)
         # 既然是 FBYG15K 这种异构且噪声大的，我们只取最最确信的 Top-1 或 Top-2
-        top_k = 1
+        top_k = 3
         visual_thresh = 0.01
         
         vals, inds = torch.topk(P_matrix, k=top_k, dim=1)
 
         # === [新增：自适应动态度数阈值计算] ===
         # 计算全图节点度数排名的后 20%
-        raw_thresh = np.percentile(node_degrees, 20)
-        # 强制限制：最少为 2，最多为 15
-        dynamic_thresh = max(2, min(int(raw_thresh), 15))
+        # raw_thresh = np.percentile(node_degrees, 20)
+        # # 强制限制：最少为 2，最多为 15
+        # dynamic_thresh = max(1, min(int(raw_thresh), 15))
+        dynamic_thresh = 10
         logger.info(f"Automatically adapted degree threshold (bottom 20%): <= {dynamic_thresh}")
         # ======================================
         
@@ -430,7 +433,8 @@ def load_eva_data(logger, args):
         'char_features': char_features,
         'input_idx': input_idx,
         'adj': adj,
-        'topo_features': topo_features
+        'topo_features': topo_features,
+        'node_degrees': node_degrees
     }, {"left": left_non_train, "right": right_non_train}, train_ill, test_ill, eval_ill, test_ill_
 
 

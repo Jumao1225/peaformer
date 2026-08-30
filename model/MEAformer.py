@@ -71,7 +71,8 @@ class MEAformer(nn.Module):
             self.topo_features = None
 
         # 初始化 Sinkhorn Loss
-        self.sinkhorn_loss_fn = SinkhornLoss(tau=0.05, n_iter=10)
+        # self.sinkhorn_loss_fn = SinkhornLoss(tau=0.05, n_iter=10)
+        self.sinkhorn_loss_fn = SinkhornLoss(tau=self.args.sinkhorn_temp, n_iter=10)
 
         # === [新增] 初始化噪声相关的统计量 ===
         if self.args.add_noise:

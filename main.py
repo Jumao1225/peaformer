@@ -378,7 +378,8 @@ class Runner:
         # [Test_Size, Test_Size]
         #distance = pairwise_distances(final_emb[test_left], final_emb[test_right])
         if self.args.distance == 2:
-            distance = pairwise_distances(final_emb[test_left], final_emb[test_right])
+            # distance = pairwise_distances(final_emb[test_left], final_emb[test_right])
+            distance = torch.cdist(final_emb[test_left], final_emb[test_right], p=2.0)
         elif self.args.distance == 1:
             distance = torch.FloatTensor(scipy.spatial.distance.cdist(
                 final_emb[test_left].cpu().data.numpy(),
@@ -394,7 +395,8 @@ class Runner:
 
         final_distance = distance # 默认回退到原始距离
 
-        temperature = 0.05
+        # temperature = 0.05
+        temperature = self.args.sinkhorn_temp
 
         # 3. Sinkhorn 温度搜索 (Temperature Search)
         if not self.args.no_sinkhorn:
@@ -499,6 +501,60 @@ class Runner:
         for i in range(len(top_k)):
             acc_l2r[i] = round(acc_l2r[i] / test_left.size(0), 4)
             acc_r2l[i] = round(acc_r2l[i] / test_right.size(0), 4)
+
+        
+        # ==========================================
+        # [NEW DEGREE-WISE EVALUATION]
+        # 在最后一次测试（last_epoch）时输出按度数的分组评测结果
+        node_degrees = self.KGs.get("node_degrees", None) if hasattr(self, "KGs") else None
+        if node_degrees is not None and last_epoch:
+            degree_group_hits_l2r = {"Degree 1-2": [0,0], "Degree 3-5": [0,0], "Degree >5": [0,0]} # [总数, Hits@1数]
+
+            # --------------------------------------
+            modal_num = weight_norm.shape[1] if weight_norm is not None else 0
+            degree_group_attn = {"Degree 1-2": [0.0]*modal_num, "Degree 3-5": [0.0]*modal_num, "Degree >5": [0.0]*modal_num}
+            # --------------------------------------
+            
+            for idx in range(test_left.shape[0]):
+                values, indices = torch.sort(final_distance[idx, :], descending=False)
+                rank = (indices == idx).nonzero(as_tuple=False).squeeze().item()
+                
+                u = test_left[idx].item()
+                deg = node_degrees[u]
+                
+                if deg <= 2:
+                    g = "Degree 1-2"
+                elif deg <= 5:
+                    g = "Degree 3-5"
+                else:
+                    g = "Degree >5"
+                
+                degree_group_hits_l2r[g][0] += 1
+                if rank == 0:
+                    degree_group_hits_l2r[g][1] += 1
+
+                # 累加 Attention 权重
+                if weight_norm is not None:
+                    w = weight_norm[u].cpu().tolist()
+                    for m in range(modal_num):
+                        degree_group_attn[g][m] += w[m]
+                    
+            if self.rank == 0:
+                self.logger.info("\n============== [MMTA] Degree-wise Performance & Attention ==============")
+                for g, (count, h1) in degree_group_hits_l2r.items():
+                    if count > 0:
+                        # self.logger.info(f"{g} (Count: {count:4d}): {h1/count:.4f}")
+                        # 计算当前组的 Hits@1
+                        acc = h1 / count
+                        
+                        # 计算当前组的平均 Attention 权重
+                        avg_attn = []
+                        if modal_num > 0:
+                            avg_attn = [round(degree_group_attn[g][m] / count, 4) for m in range(modal_num)]
+                            
+                        self.logger.info(f"{g} (Count: {count:4d}) | Hits@1: {acc:.4f} | Avg Attn: {avg_attn}")
+                self.logger.info("=======================================================================\n")
+        # ==========================================
         
         gc.collect()
 
